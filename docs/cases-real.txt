@@ -1,0 +1,20 @@
+S_n=\frac{a_1(1-q^n)}{1-q},\quad q\neq 1
+(a+b)^n=\sum_{k=0}^{n}\binom{n}{k}a^{n-k}b^k
+\sin 2\theta=2\sin\theta\cos\theta
+\frac{x^2}{a^2}+\frac{y^2}{b^2}=1
+f(x)=\sum_{n=0}^{\infty}\frac{f^{(n)}(a)}{n!}(x-a)^n
+\oint_{\partial D}P\,dx+Q\,dy=\iint_D\left(\frac{\partial Q}{\partial x}-\frac{\partial P}{\partial y}\right)dx\,dy
+\oint_{\Sigma}\vec{F}\cdot d\vec{S}=\iiint_V\nabla\cdot\vec{F}\,dV
+\det(A-\lambda I)=0
+P(A\mid B)=\frac{P(B\mid A)P(A)}{P(B)}
+f(x)=\frac{1}{\sigma\sqrt{2\pi}}e^{-\frac{(x-\mu)^2}{2\sigma^2}}
+\nabla_\theta L=-\eta\nabla_\theta J(\theta)
+\mathrm{softmax}(z_i)=\frac{e^{z_i}}{\sum_j e^{z_j}}
+\nabla\cdot\vec{E}=\frac{\rho}{\varepsilon_0},\quad \nabla\times\vec{B}=\mu_0\vec{J}+\mu_0\varepsilon_0\frac{\partial\vec{E}}{\partial t}
+i\hbar\frac{\partial\psi}{\partial t}=-\frac{\hbar^2}{2m}\nabla^2\psi+V\psi
+\vec{F}=q(\vec{E}+\vec{v}\times\vec{B})
+E=mc^2
+\hat{f}(\xi)=\int_{-\infty}^{\infty}f(x)e^{-2\pi i x\xi}\,dx
+\mathcal{L}\{f(t)\}=\int_0^{\infty}f(t)e^{-st}\,dt
+\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V
+C=S_0N(d_1)-Ke^{-rT}N(d_2)

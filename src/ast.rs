@@ -78,6 +78,8 @@ pub enum Expr {
     },
     /// `\substack{a\\b}`：多行小字堆叠（常用于求和/并集的上下限）。
     Lines(Vec<Expr>),
+    /// 函数名：`\sin` `\log` `\det` 等。TeX 规定用正体，且后面带一个 thin space。
+    Func(String),
     /// 占位：保留尺寸但不绘制。keep_w/keep_h 决定保留哪一维。
     /// phantom 两维都留，hphantom 只留宽，vphantom 只留高深，smash 保留宽度、高度深度归零。
     Phantom {
@@ -148,7 +150,7 @@ fn walk_unknown(e: &Expr, out: &mut Vec<String>) {
         Expr::Lines(v) => v.iter().for_each(|e| walk_unknown(e, out)),
         Expr::Phantom { body, .. } => walk_unknown(body, out),
         // 叶子节点，不会有 Unknown
-        Expr::Atom { .. } | Expr::Symbol(_) | Expr::Text(_) => {}
+        Expr::Atom { .. } | Expr::Symbol(_) | Expr::Text(_) | Expr::Func(_) => {}
     }
 }
 
@@ -310,11 +312,15 @@ impl Parser {
             "sin" | "cos" | "tan" | "log" | "ln" | "exp" | "sec" | "csc" | "cot" |
             "arcsin" | "arccos" | "arctan" | "sinh" | "cosh" | "tanh" | "arg" | "deg" | "dim" |
             "ker" | "hom" | "Pr" | "mod" | "bmod" | "pmod" | "sgn" => {
-                // 逻辑符名：字号稍大、直立（布局层按 symbol 处理），可带脚本
+                // 函数名：正体排版（Expr::Func），可带上下标。
+                // 原来包成 Symbol，而符号表里没有 "sin"，布局时直接变空盒——公式里的
+                // 三角函数名被静默吞掉，`\sin 2\theta` 会渲染成 `2\theta`。
                 let (sub, sup) = self.parse_scripts_hungry()?;
-                Ok(Expr::Scripts {
-                    base: Box::new(Expr::Symbol(name)),
-                    sub, sup,
+                let base = Expr::Func(name);
+                Ok(if sub.is_some() || sup.is_some() {
+                    Expr::Scripts { base: Box::new(base), sub, sup }
+                } else {
+                    base
                 })
             }
             // ---- limits 修饰符（TeX：告诉 TeX 上下限放运算符上下/右侧；引擎默认上下即 limits 语义）----
@@ -628,6 +634,7 @@ fn looks_like_greek_or_symbol(name: &str) -> bool {
         "big","Big","bigg","Bigg","bigl","bigr","Bigl","Bigr","biggl","biggr","Biggl","Biggr",
         "left","right","middle","mathopen","mathclose","mathrel","mathbin","mathord","mathop",
         // 2026-11-13 按真实文档补齐的符号命令
+        "top","bot","angle","measuredangle","triangle",
         "bigodot","bigsqcup","bigstar","biguplus","iiiint","circledast","circledcirc","circleddash",
         "uplus","sqcup","sqcap","smallint","oiint","oiiint","intop","ulcorner","urcorner","llcorner","lrcorner","llbracket","rrbracket","llparenthesis","rrparenthesis",
         "nearrow","searrow","swarrow","nwarrow","leftharpoonup","leftharpoondown","rightharpoonup","rightharpoondown","rightleftharpoons","leftrightharpoons","rightrightarrows","leftleftarrows","rightleftarrows","leftrightarrows","upuparrows","downdownarrows","upharpoonleft","upharpoonright","downharpoonleft","downharpoonright","curvearrowleft","curvearrowright","circlearrowleft","circlearrowright","looparrowleft","looparrowright","multimap","rightsquigarrow","leadsto","dashrightarrow","dashleftarrow","twoheadrightarrow","twoheadleftarrow","Longleftarrow","Longrightarrow","Longleftrightarrow","Uparrow","Downarrow","Updownarrow","nsubseteq","nsupseteq","subsetneq","supsetneq","varsubsetneq","varsupsetneq","sqsubset","sqsupset","sqsubseteq","sqsupseteq","Subset","Supset","owns","complement","smallsetminus","nleq","ngeq","nless","ngtr","nsim","ncong","nparallel","nmid","nprec","nsucc","triangleq","eqsim","approxeq","asymp","smile","frown","models","vDash","Vdash","VDash","nvdash","nVdash","perp","parallel","mid","shortmid","shortparallel","nexists","lnot","wedge","vee","impliedby","iff","blacklozenge","diamond","lozenge","boxplus","boxminus","boxtimes","boxdot","dotplus","divideontimes","ltimes","rtimes","leftthreetimes","rightthreetimes","barwedge","veebar","doublebarwedge","curlywedge","curlyvee","Cup","Cap","intercal","triangle","blacktriangle","blacktriangledown","blacktriangleleft","blacktriangleright","blacksquare","square","Box","Diamond",

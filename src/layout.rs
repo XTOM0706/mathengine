@@ -241,8 +241,15 @@ fn layout_box(font: &MathFont, expr: &Expr, style: Style) -> Box {
             wrap_delimiters(font, &b, Some('('), Some(')'), gap, style.scale_of(font), 1.16)
         }
         Expr::Text(s) => {
-            // 文本模式：按普通字符排，字号同正文
-            layout_text_run(font, &s.chars().collect::<Vec<_>>(), scale)
+            // 文本模式：正体、字号同正文。之前用了 layout_text_run（会套数学斜体），
+            // 导致 `\text{if}`、`\mathrm{softmax}` 全变成斜体。
+            layout_text_run_upright(font, &s.chars().collect::<Vec<_>>(), scale)
+        }
+        Expr::Func(name) => {
+            // 函数名：正体，后面跟一个 thin space（TeX 的 \mathop 间距）
+            let mut b = layout_text_run_upright(font, &name.chars().collect::<Vec<_>>(), scale);
+            b.width += font.units_per_em() / 6.0 * scale;
+            b
         }
         Expr::Bigop { name, sub, sup } => layout_bigop(font, name, sub.as_deref(), sup.as_deref(), style),
         Expr::LeftRight { open, body, close } => layout_left_right(font, open, body.as_ref(), close, style),

@@ -106,6 +106,7 @@ void arix_math_free(ArixMathLayout* layout);
 | 布局耗时（本机，15 条公式 30000 次采样） | 中位 3.04 µs，p95 8.23 µs |
 | 与 jlatexmath 1.0.7 对比 | 整体约快 1.5 倍，矩阵快 5 倍，求和略慢 |
 | 命令覆盖 | 约 40 个命令；基础 30 条常用结构实测三方持平，进阶命令远窄于 KaTeX / jlatexmath |
+| 真实场景 | 20 条教材/工程公式全部渲染，无命令丢弃、无缺字（`docs/cases-real.txt`） |
 
 完整的测量方法、逐条对照与体积对比见 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)。体积一项本引擎不占优，文档里写明了原因与改进方向。
 
