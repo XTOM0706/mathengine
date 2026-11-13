@@ -1,6 +1,6 @@
 # mathengine
 
-一个只做**数学模式**的轻量 LaTeX 排版引擎，用 Rust 写成，2600 余行，63 个单元测试。
+一个只做**数学模式**的轻量 LaTeX 排版引擎，用 Rust 写成，2600 余行，75 个测试。
 
 输入是一段 LaTeX 公式，输出是**扁平的绘制指令**：每个字形的码位、位置、缩放，加上分数线与根号横线的矩形。渲染层不需要理解 TeX，照着画即可。
 
@@ -89,12 +89,14 @@ void arix_math_free(ArixMathLayout* layout);
 | Rust 源码行数 | 2574 |
 | 单元测试 | 63 个（含 5 个针对已修缺陷的回归测试） |
 | 集成测试 | 7 个（只走公共 API） |
+| 稳定性测试 | 5 个，含 2000 条随机输入的 fuzz，0 panic |
 | 运行时依赖 | 无（仅 `ttf-parser` 编译期依赖） |
-| 附带字体 | Latin Modern Math 子集，263 KB（4802 → 1853 字形，见 `tools/subset_font.py`） |
+| 附带字体 | Latin Modern Math 子集，265 KB（4802 → 1877 字形，见 `tools/subset_font.py`） |
 | release `.so` | 520 KB（x86_64，`opt-level=s` + LTO + strip + 单代码单元） |
 | 合计 | 约 777 KB；宿主若自带字体则只需 520 KB |
 | 布局耗时（本机，15 条公式 30000 次采样） | 中位 3.04 µs，p95 8.23 µs |
 | 与 jlatexmath 1.0.7 对比 | 整体约快 1.5 倍，矩阵快 5 倍，求和略慢 |
+| 命令覆盖 | 约 40 个命令；基础 30 条常用结构实测三方持平，进阶命令远窄于 KaTeX / jlatexmath |
 
 完整的测量方法、逐条对照与体积对比见 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)。体积一项本引擎不占优，文档里写明了原因与改进方向。
 

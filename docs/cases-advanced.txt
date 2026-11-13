@@ -1,0 +1,20 @@
+\color{red}{x^2}
+\def\a{b}\a
+\begin{align} a &= b \\ c &= d \end{align}
+\overset{?}{=}
+\underset{x}{\min}
+\underbrace{a+b}_{n}
+\overbrace{a+b}^{n}
+\boldsymbol{\alpha}
+\text{中文测试}
+\begin{array}{c|c} a & b \end{array}
+\substack{i=1\\j=2}
+\genfrac{(}{)}{0}{}{a}{b}
+\xrightarrow{n\to\infty}
+\not=
+\boxed{x}
+\phantom{x}
+\cancel{x}
+\enclose{circle}{x}
+\ce{H2O}
+\mathrm{argmax}

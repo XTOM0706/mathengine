@@ -93,7 +93,10 @@ impl<'a> MathFont<'a> {
     pub fn ink_extents_plain(&self, ch: char) -> Option<(f32, f32)> {
         let g = self.face.glyph_index(ch)?;
         let rect = self.face.glyph_bounding_box(g)?;
-        Some((rect.y_max as f32, -rect.y_min as f32))
+        // 墨迹可能整个落在基线一侧（减号、等号全在基线上方，下标字母全在下方）：
+        // 此时文件里的 y_min 为正 / y_max 为负，直接取反会得到一个负的 depth/height，
+        // 一路传下去会让布局尺寸变成负数。两侧都夹到 0。
+        Some(((rect.y_max as f32).max(0.0), (-rect.y_min as f32).max(0.0)))
     }
 
     /// 字符的**墨迹**包围盒（真实 ink，非 hhea 全局上行/下行）。
@@ -104,7 +107,10 @@ impl<'a> MathFont<'a> {
         let m = to_math_italic(ch);
         let g = self.face.glyph_index(m)?;
         let rect = self.face.glyph_bounding_box(g)?;
-        Some((rect.y_max as f32, -rect.y_min as f32))
+        // 墨迹可能整个落在基线一侧（减号、等号全在基线上方，下标字母全在下方）：
+        // 此时文件里的 y_min 为正 / y_max 为负，直接取反会得到一个负的 depth/height，
+        // 一路传下去会让布局尺寸变成负数。两侧都夹到 0。
+        Some(((rect.y_max as f32).max(0.0), (-rect.y_min as f32).max(0.0)))
     }
 
     /// 字符墨迹的水平范围（font units，scale 1）：返回 (x_min, x_max)。

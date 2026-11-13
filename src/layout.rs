@@ -114,28 +114,8 @@ fn layout_box(font: &MathFont, expr: &Expr, style: Style) -> Box {
             // 旧实现把括号留给「绘制层」，但绘制层拿到的只是字形指令、不知道这里该包括号，
             // 结果 \binom{n}{k} 渲染出来只有上下两个数。这里直接补上。
             let b = layout_stacked(font, n.as_ref(), k.as_ref(), style, false);
-            let (pa, pd) = font.ink_extents('(').unwrap_or((font.ascender, font.descender));
-            let (pa, pd) = (pa.max(1.0), pd.max(1.0));
-            let ds = ((b.height + b.depth) / (pa + pd) * 1.16)
-                .clamp(style.scale_of(font), style.scale_of(font) * 4.0);
-            let open = layout_char(font, '(', ds, 0.0);
-            let close = layout_char(font, ')', ds, 0.0);
             let gap = font.units_per_em() * 0.04 * style.scale_of(font);
-            let mut out = Box::empty();
-            out.width = open.width + gap + b.width + gap + close.width;
-            out.height = b.height.max(open.height);
-            out.depth = b.depth.max(open.depth);
-            // 括号按内容墨迹的垂直中心对齐，不能简单挂在 y=0 基线上：
-            // 二项式上面是 n、下面是 k，内容中心并不在基线上。
-            let body_center = (b.height - b.depth) / 2.0;
-            let paren_center = (pa - pd) / 2.0;
-            let dy = body_center - paren_center * ds;
-            merge_at(&mut out, &open, 0.0, dy);
-            merge_at(&mut out, &b, open.width + gap, 0.0);
-            merge_at(&mut out, &close, open.width + gap + b.width + gap, dy);
-            out.height = out.height.max(dy + open.height);
-            out.depth = out.depth.max(-dy + open.depth);
-            out
+            wrap_delimiters(font, &b, Some('('), Some(')'), gap, style.scale_of(font), 1.16)
         }
         Expr::Text(s) => {
             // 文本模式：按普通字符排，字号同正文
@@ -656,43 +636,9 @@ fn layout_left_right(font: &MathFont, open: &str, body: &Expr, close: &str, styl
     let open_ch = delim_to_char(open);
     let close_ch = delim_to_char(close);
     let body_box = layout_box(font, body, style);
+    // 分隔符用真实墨迹缩放并垂直居中，包住 body（公共逻辑见 wrap_delimiters）
     let gap = ups * 0.08 * scale;
-
-    // 分隔符墨迹范围（scale 1）：取 open/close 中较高者（同字体下通常相同）。
-    let (pa, pd) = match open_ch.or(close_ch) {
-        Some(c) => font.ink_extents(c).unwrap_or((font.ascender, font.descender)),
-        None => (font.ascender, font.descender),
-    };
-    let pa = pa.max(1.0); let pd = pd.max(1.0);
-
-    // 缩放使分隔符墨迹**恰好包住** body：按总墨迹高比 (h+d)/(pa+pd)。
-    // 原实现取 max(h/pa, d/pd) 并各自余量，遇到非对称 body（如分数整体偏基线下方）会把括号撑爆。
-    let delim_scale = ((body_box.height + body_box.depth) / (pa + pd) * 1.06).clamp(scale, scale * 4.0);
-
-    // 垂直居中：分隔符中心（基线之上 (pa-pd)/2）对齐 body 中心 (height-depth)/2。
-    let body_center = (body_box.height - body_box.depth) / 2.0;
-    let paren_center = (pa - pd) / 2.0;
-    let delim_dy = body_center - paren_center * delim_scale;
-
-    let mut out = Box::empty();
-    let mut width = 0.0;
-    if let Some(oc) = open_ch {
-        let ob = layout_char(font, oc, delim_scale, 0.0);
-        merge_at(&mut out, &ob, 0.0, delim_dy);
-        width += ob.width;
-    }
-    width += gap;
-    merge_at(&mut out, &body_box, width, 0.0);
-    width += body_box.width;
-    if let Some(cc) = close_ch {
-        let cb = layout_char(font, cc, delim_scale, 0.0);
-        merge_at(&mut out, &cb, width + gap, delim_dy);
-        width += gap + cb.width;
-    } else {
-        width += gap;
-    }
-    out.width = width;
-    out
+    wrap_delimiters(font, &body_box, open_ch, close_ch, gap, scale, 1.06)
 }
 
 fn delim_to_char(d: &str) -> Option<char> {
@@ -755,33 +701,8 @@ fn layout_matrix(font: &MathFont, env: &str, rows: &[Vec<Expr>], style: Style) -
         _ => None,
     };
     if let Some((o, c)) = paren {
-        // 分隔符墨迹（scale 1）：取左右中较高者。
-        let (pa, pd) = font.ink_extents(o)
-            .or_else(|| c.and_then(|cc| font.ink_extents(cc)))
-            .unwrap_or((font.ascender, font.descender));
-        let pa = pa.max(1.0); let pd = pd.max(1.0);
-
-        // 按**总墨迹高**缩放并垂直居中：原实现用 max(height/pa, depth/pd) 且以 ascender 为基准，
-        // 非对称内容（矩阵整体挂在基线下方）会把括号撑得过大/错位；按 (height+depth)/(pa+pd) 才是
-        // 「括号墨迹恰好包住内容」的比例。
-        let delim_scale = ((out.height + out.depth) / (pa + pd) * 1.06).clamp(scale, scale * 4.0);
-        let body_center = (out.height - out.depth) / 2.0;
-        let paren_center = (pa - pd) / 2.0;
-        let delim_dy = body_center - paren_center * delim_scale;
-
         let gap = ups * 0.06 * scale;
-        let open_b = layout_char(font, o, delim_scale, 0.0);
-        let close_b = c.map(|cc| layout_char(font, cc, delim_scale, 0.0));
-
-        // 内容整体右移「左括号宽 + 间隙」，左右括号贴内容两端（原实现括号放 -bw 留了一段空隙）。
-        let mut res = Box::empty();
-        let body_x = open_b.width + gap;
-        merge_at(&mut res, &out, body_x, 0.0);
-        merge_at(&mut res, &open_b, 0.0, delim_dy);
-        if let Some(cb) = &close_b {
-            merge_at(&mut res, cb, body_x + out.width + gap, delim_dy);
-        }
-        out = res;
+        out = wrap_delimiters(font, &out, Some(o), c, gap, scale, 1.06);
     }
     out
 }
@@ -802,6 +723,74 @@ fn translate(b: &Box, dx: f32, dy: f32) -> Box {
 /// 平移后合并：把 src（平移到 dx/dy）并入 dst——尺寸按偏移折算。
 /// ⚠ 必须用这个而不是 `merge(&mut out, &translate(...))`：merge 的 height/depth 不通晓平移偏移，
 /// translate 后的盒 height/depth 是"自己坐标系"的，直接 max 会尺寸错乱（分数/根号/括号全受影响）。
+/// 分隔符（括号、方括号、大括号）包住内容时的拉伸参数。
+struct DelimFit {
+    scale: f32,
+    dy: f32,
+}
+
+/// 算出「让分隔符墨迹恰好包住 height/depth 的内容」所需缩放与垂直偏移。
+///
+/// 三个调用点（`\binom`、`\left…\right`、矩阵环境）原本各自抄了一遍同样的公式，
+/// 改一处忘另一处就会一个包得住、一个包不住。抽到这里，`factor` 只留各处的视觉余量差异。
+fn fit_delimiter(
+    font: &MathFont,
+    ch: char,
+    height: f32,
+    depth: f32,
+    min_scale: f32,
+    factor: f32,
+) -> DelimFit {
+    let (pa, pd) = font.ink_extents(ch).unwrap_or((font.ascender, font.descender));
+    let (pa, pd) = (pa.max(1.0), pd.max(1.0));
+    // 按**总墨迹高**比，而不是 max(h/pa, d/pd)：非对称内容（分数整体挂在基线下方）
+    // 用后者会把括号撑爆或错位。
+    let scale = ((height + depth) / (pa + pd) * factor).clamp(min_scale, min_scale * 4.0);
+    // 垂直居中：分隔符中心与内容中心对齐
+    let dy = (height - depth) / 2.0 - (pa - pd) / 2.0 * scale;
+    DelimFit { scale, dy }
+}
+
+/// 用一对分隔符把 body 包起来（`close` 为 `None` 时只有左侧，例如 `cases`）。
+///
+/// 宽度、高度、深度都按实际拼出来的结果重算，调用方不用自己维护。
+fn wrap_delimiters(
+    font: &MathFont,
+    body: &Box,
+    open: Option<char>,
+    close: Option<char>,
+    gap: f32,
+    min_scale: f32,
+    factor: f32,
+) -> Box {
+    let reference = open.or(close);
+    let fit = reference.map(|ch| {
+        fit_delimiter(font, ch, body.height, body.depth, min_scale, factor)
+    });
+    let (ds, dy) = fit.map(|f| (f.scale, f.dy)).unwrap_or((min_scale, 0.0));
+
+    let open_b = open.map(|ch| layout_char(font, ch, ds, 0.0));
+    let close_b = close.map(|ch| layout_char(font, ch, ds, 0.0));
+
+    let mut out = Box::empty();
+    let mut x = 0.0;
+    if let Some(ob) = &open_b {
+        merge_at(&mut out, ob, 0.0, dy);
+        x += ob.width + gap;
+    }
+    merge_at(&mut out, body, x, 0.0);
+    x += body.width;
+    if let Some(cb) = &close_b {
+        x += gap;
+        merge_at(&mut out, cb, x, dy);
+        x += cb.width;
+    }
+    out.width = x;
+    out.height = out.height.max(body.height);
+    out.depth = out.depth.max(body.depth);
+    out
+}
+
 fn merge_at(dst: &mut Box, src: &Box, dx: f32, dy: f32) {
     // 平移后该盒相对 dst 基线的垂向范围：顶 = src.height + dy，底 = src.depth - dy
     dst.height = dst.height.max(src.height + dy);

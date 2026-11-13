@@ -1,0 +1,30 @@
+x^2
+a_{i}^{2}
+\frac{a}{b}
+\frac{1}{1+\frac{1}{x}}
+\sqrt{x}
+\sqrt[3]{x}
+\sqrt[n]{x}
+\binom{n}{k}
+\sum_{i=1}^{n} i^2
+\int_0^1 x^2 dx
+\lim_{x\to 0} \frac{\sin x}{x}
+\prod_{i=1}^{n} i
+\oint_C f(z)\,dz
+\left( \frac{a}{b} \right)
+\left[ x \right]
+\begin{pmatrix} a & b \\ c & d \end{pmatrix}
+\begin{cases} a & x>0 \\ b & x<0 \end{cases}
+\alpha + \beta = \gamma
+\mathbb{R}
+\mathcal{L}
+\hat{x}
+\bar{x}
+\vec{v}
+\dot{x}
+\tilde{x}
+\operatorname{argmax}
+\sin x + \cos y
+x \neq y \leq z
+\forall x \in \mathbb{R}
+\overline{AB}
