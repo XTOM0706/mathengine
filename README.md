@@ -55,6 +55,15 @@ Android 端需要 JNI 导出时才打开 feature：
 cargo build --release --features jni --target aarch64-linux-android
 ```
 
+## 本地预览（网页）
+
+```bash
+cargo run --release --example server
+# 浏览器打开 http://127.0.0.1:8737
+```
+
+左边写 LaTeX、右边实时出图，标出字形数、渲染微秒数、缺字数。渲染走的是真引擎（`mathengine::svg`），不是前端模拟。零依赖：HTTP 自己解析，不需要 Node、不需要构建前端。
+
 ## 跨端
 
 核心完全是平台无关的 Rust：只用 `std` + `ttf-parser`，没有任何 `cfg(target_os)` 分支，不碰文件系统以外的系统调用，输出是纯数据结构。

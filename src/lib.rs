@@ -22,6 +22,7 @@ pub mod ffi;
 pub mod font;
 pub mod layout;
 pub mod preview;
+pub mod svg;
 pub mod token;
 
 #[cfg(feature = "jni")]
