@@ -371,6 +371,12 @@ fn layout_text_run_upright(font: &MathFont, chars: &[char], scale: f32) -> Box {
 
 /// 符号命令 → glyph（查表：希腊字母/运算符映射到 Unicode 数学符号）。
 fn layout_symbol(font: &MathFont, name: &str, scale: f32) -> Box {
+    // 间距命令不画字形，只占宽度
+    if let Some(w) = spacing_width(font, name) {
+        let mut b = Box::empty();
+        b.width = w * scale;
+        return b;
+    }
     let ch = symbol_to_char(name);
     match ch {
         Some(c) => layout_char(font, c, scale, 0.0),
@@ -378,205 +384,232 @@ fn layout_symbol(font: &MathFont, name: &str, scale: f32) -> Box {
     }
 }
 
+fn symbol_map() -> &'static std::collections::HashMap<&'static str, char> {
+    use std::sync::OnceLock;
+    static M: OnceLock<std::collections::HashMap<&'static str, char>> = OnceLock::new();
+    M.get_or_init(|| {
+        let mut m = std::collections::HashMap::new();
+        // 希腊字母（小写）
+        for (n, c) in [
+            ("alpha", 'α'), ("beta", 'β'), ("gamma", 'γ'), ("delta", 'δ'),
+            ("epsilon", 'ϵ'), ("varepsilon", 'ε'), ("zeta", 'ζ'), ("eta", 'η'),
+            ("theta", 'θ'), ("vartheta", 'ϑ'), ("iota", 'ι'), ("kappa", 'κ'),
+            ("lambda", 'λ'), ("mu", 'μ'), ("nu", 'ν'), ("xi", 'ξ'), ("pi", 'π'),
+            ("varpi", 'ϖ'), ("rho", 'ρ'), ("varrho", 'ϱ'), ("sigma", 'σ'),
+            ("varsigma", 'ς'), ("tau", 'τ'), ("upsilon", 'υ'), ("phi", 'ϕ'),
+            ("varphi", 'φ'), ("chi", 'χ'), ("psi", 'ψ'), ("omega", 'ω'),
+            // 大写
+            ("Gamma", 'Γ'), ("Delta", 'Δ'), ("Theta", 'Θ'), ("Lambda", 'Λ'),
+            ("Xi", 'Ξ'), ("Pi", 'Π'), ("Sigma", 'Σ'), ("Upsilon", 'Υ'),
+            ("Phi", 'Φ'), ("Psi", 'Ψ'), ("Omega", 'Ω'),
+            // 大写数学斜体特殊
+            ("ell", 'ℓ'), ("hbar", 'ℏ'), ("imath", 'ı'), ("jmath", 'ȷ'),
+            ("wp", '℘'), ("Re", 'ℜ'), ("Im", 'ℑ'), ("aleph", 'ℵ'),
+            ("partial", '∂'), ("nabla", '∇'), ("infty", '∞'), ("emptyset", '∅'),
+            ("varnothing", '∅'),
+        ] { m.insert(n, c); }
+        // 运算符/关系/箭头
+        for (n, c) in [
+            ("times", '×'), ("div", '÷'), ("pm", '±'), ("mp", '∓'), ("cdot", '⋅'),
+            ("ast", '∗'), ("star", '⋆'), ("circ", '∘'), ("bullet", '∙'),
+            ("leq", '≤'), ("geq", '≥'), ("neq", '≠'), ("equiv", '≡'), ("sim", '∼'),
+            ("le", '≤'), ("ge", '≥'), ("ne", '≠'), ("leqq", '≦'), ("geqq", '≧'),
+            ("simeq", '≃'), ("approx", '≈'), ("cong", '≅'), ("propto", '∝'),
+            ("prec", '≺'), ("succ", '≻'), ("preceq", '⪯'), ("succeq", '⪰'),
+            ("ll", '≪'), ("gg", '≫'), ("subset", '⊂'), ("supset", '⊃'),
+            ("subseteq", '⊆'), ("supseteq", '⊇'), ("cup", '∪'), ("cap", '∩'),
+            ("setminus", '∖'), ("in", '∈'), ("ni", '∋'), ("notin", '∉'),
+            ("forall", '∀'), ("exists", '∃'), ("neg", '¬'), ("land", '∧'),
+            ("lor", '∨'), ("oplus", '⊕'), ("otimes", '⊗'), ("ominus", '⊖'),
+            ("oslash", '⊘'), ("odot", '⊙'), ("dagger", '†'), ("ddagger", '‡'),
+            ("dots", '…'), ("ldots", '…'), ("cdots", '⋯'), ("vdots", '⋮'), ("ddots", '⋱'),
+            ("prime", '′'), ("backslash", '∖'), ("angle", '∠'), ("triangle", '△'),
+            ("surd", '√'), ("succeq", '⪰'), ("in", '∈'),
+            ("to", '→'), ("rightarrow", '→'), ("leftarrow", '←'), ("leftrightarrow", '↔'),
+            ("mapsto", '↦'), ("Rightarrow", '⇒'), ("Leftarrow", '⇐'), ("Leftrightarrow", '⇔'),
+            ("uparrow", '↑'), ("downarrow", '↓'), ("updownarrow", '↕'),
+            ("hookrightarrow", '↪'), ("hookleftarrow", '↩'),
+            ("longrightarrow", '⟶'), ("longleftarrow", '⟵'), ("longleftrightarrow", '⟷'),
+            ("iff", '⟺'), ("implies", '⟹'), ("impliedby", '⟸'), ("gets", '←'),
+            ("lt", '<'), ("gt", '>'),
+            ("land", '∧'), ("lor", '∨'),
+            ("bigodot", '\u{2299}'),
+            ("bigsqcup", '\u{2A06}'),
+            ("bigstar", '\u{22C6}'),
+            ("biguplus", '\u{2A04}'),
+            ("iiiint", '\u{2A0C}'),
+            ("circledast", '\u{229B}'),
+            ("circledcirc", '\u{229A}'),
+            ("circleddash", '\u{229D}'),
+            ("uplus", '\u{228E}'),
+            ("sqcup", '\u{2294}'),
+            ("sqcap", '\u{2293}'),
+            ("smallint", '\u{222B}'),
+            ("oiint", '\u{222F}'),
+            ("oiiint", '\u{2230}'),
+            ("intop", '\u{222B}'),
+            ("ulcorner", '\u{231C}'),
+            ("urcorner", '\u{231D}'),
+            ("llcorner", '\u{231E}'),
+            ("lrcorner", '\u{231F}'),
+            ("llbracket", '\u{27E6}'),
+            ("rrbracket", '\u{27E7}'),
+            ("llparenthesis", '\u{0028}'),
+            ("rrparenthesis", '\u{0029}'),
+            ("nearrow", '\u{2197}'),
+            ("searrow", '\u{2198}'),
+            ("swarrow", '\u{2199}'),
+            ("nwarrow", '\u{2196}'),
+            ("leftharpoonup", '\u{21BC}'),
+            ("leftharpoondown", '\u{21BD}'),
+            ("rightharpoonup", '\u{21C0}'),
+            ("rightharpoondown", '\u{21C1}'),
+            ("rightleftharpoons", '\u{21CC}'),
+            ("leftrightharpoons", '\u{21CB}'),
+            ("rightrightarrows", '\u{21C9}'),
+            ("leftleftarrows", '\u{21C7}'),
+            ("rightleftarrows", '\u{21C4}'),
+            ("leftrightarrows", '\u{21C6}'),
+            ("upuparrows", '\u{21C8}'),
+            ("downdownarrows", '\u{21CA}'),
+            ("upharpoonleft", '\u{21BF}'),
+            ("upharpoonright", '\u{21BE}'),
+            ("downharpoonleft", '\u{21C3}'),
+            ("downharpoonright", '\u{21C2}'),
+            ("curvearrowleft", '\u{21B6}'),
+            ("curvearrowright", '\u{21B7}'),
+            ("circlearrowleft", '\u{21BA}'),
+            ("circlearrowright", '\u{21BB}'),
+            ("looparrowleft", '\u{21AB}'),
+            ("looparrowright", '\u{21AC}'),
+            ("multimap", '\u{22B8}'),
+            ("rightsquigarrow", '\u{21DD}'),
+            ("leadsto", '\u{21DD}'),
+            ("dashrightarrow", '\u{2192}'),
+            ("dashleftarrow", '\u{2190}'),
+            ("twoheadrightarrow", '\u{21A0}'),
+            ("twoheadleftarrow", '\u{219E}'),
+            ("Longleftarrow", '\u{27F8}'),
+            ("Longrightarrow", '\u{27F9}'),
+            ("Longleftrightarrow", '\u{27FA}'),
+            ("Uparrow", '\u{21D1}'),
+            ("Downarrow", '\u{21D3}'),
+            ("Updownarrow", '\u{21D5}'),
+            ("nsubseteq", '\u{2288}'),
+            ("nsupseteq", '\u{2289}'),
+            ("subsetneq", '\u{228A}'),
+            ("supsetneq", '\u{228B}'),
+            ("varsubsetneq", '\u{228A}'),
+            ("varsupsetneq", '\u{228B}'),
+            ("sqsubset", '\u{228F}'),
+            ("sqsupset", '\u{2290}'),
+            ("sqsubseteq", '\u{2291}'),
+            ("sqsupseteq", '\u{2292}'),
+            ("Subset", '\u{22D0}'),
+            ("Supset", '\u{22D1}'),
+            ("owns", '\u{220B}'),
+            ("complement", '\u{2201}'),
+            ("smallsetminus", '\u{2216}'),
+            ("nleq", '\u{2270}'),
+            ("ngeq", '\u{2271}'),
+            ("nless", '\u{226E}'),
+            ("ngtr", '\u{226F}'),
+            ("nsim", '\u{2241}'),
+            ("ncong", '\u{2247}'),
+            ("nparallel", '\u{2226}'),
+            ("nmid", '\u{2224}'),
+            ("nprec", '\u{2280}'),
+            ("nsucc", '\u{2281}'),
+            ("triangleq", '\u{225C}'),
+            ("eqsim", '\u{2242}'),
+            ("approxeq", '\u{224A}'),
+            ("asymp", '\u{224D}'),
+            ("smile", '\u{2323}'),
+            ("frown", '\u{2322}'),
+            ("models", '\u{22A8}'),
+            ("vDash", '\u{22A8}'),
+            ("Vdash", '\u{22A9}'),
+            ("VDash", '\u{22AB}'),
+            ("nvdash", '\u{22AC}'),
+            ("nVdash", '\u{22AE}'),
+            ("perp", '\u{22A5}'),
+            ("parallel", '\u{2225}'),
+            ("mid", '\u{2223}'),
+            ("shortmid", '\u{2223}'),
+            ("shortparallel", '\u{2225}'),
+            ("nexists", '\u{2204}'),
+            ("lnot", '\u{00AC}'),
+            ("wedge", '\u{2227}'),
+            ("vee", '\u{2228}'),
+            ("impliedby", '\u{27F8}'),
+            ("iff", '\u{27FA}'),
+            ("blacklozenge", '\u{2666}'),
+            ("diamond", '\u{22C4}'),
+            ("lozenge", '\u{25CA}'),
+            ("boxplus", '\u{229E}'),
+            ("boxminus", '\u{229F}'),
+            ("boxtimes", '\u{22A0}'),
+            ("boxdot", '\u{22A1}'),
+            ("dotplus", '\u{2214}'),
+            ("divideontimes", '\u{22C7}'),
+            ("ltimes", '\u{22C9}'),
+            ("rtimes", '\u{22CA}'),
+            ("leftthreetimes", '\u{22CB}'),
+            ("rightthreetimes", '\u{22CC}'),
+            ("barwedge", '\u{22BC}'),
+            ("veebar", '\u{22BB}'),
+            ("doublebarwedge", '\u{22BC}'),
+            ("curlywedge", '\u{22CF}'),
+            ("curlyvee", '\u{22CE}'),
+            ("Cup", '\u{22D3}'),
+            ("Cap", '\u{22D2}'),
+            ("intercal", '\u{22BA}'),
+            ("triangle", '\u{25B3}'),
+            ("blacktriangle", '\u{25B2}'),
+            ("blacktriangledown", '\u{25BC}'),
+            ("blacktriangleleft", '\u{25C0}'),
+            ("blacktriangleright", '\u{25B6}'),
+            ("blacksquare", '\u{25A0}'),
+            ("square", '\u{25A1}'),
+            ("Box", '\u{25A1}'),
+            ("Diamond", '\u{22C4}'),
+        ] { m.insert(n, c); }
+        m
+    })
+}
+
 /// 数学符号命令 → Unicode 字符（覆盖常用全集；查不到的返回 None）。
+/// 间距命令的宽度（font units）。TeX 的 1mu = 1/18 em。
+fn spacing_width(font: &MathFont, name: &str) -> Option<f32> {
+    let ups = font.units_per_em();
+    let mu = ups / 18.0;
+    Some(match name {
+        "," | "thinspace" => 3.0 * mu,
+        ":" | "medspace" => 4.0 * mu,
+        ";" | "thickspace" => 5.0 * mu,
+        "!" | "negthinspace" => 0.0,   // 负间距夹到 0，避免行宽变成负数
+        "enspace" => 0.5 * ups,
+        "quad" => ups,
+        "qquad" => 2.0 * ups,
+        " " => font.advance(' '),
+        _ => return None,
+    })
+}
+
 fn symbol_to_char(name: &str) -> Option<char> {
-    use std::collections::HashMap;
     // 静态表，避免每次构建
     // 惰性初始化
-    fn table() -> &'static HashMap<&'static str, char> {
-        use std::sync::OnceLock;
-        static M: OnceLock<HashMap<&'static str, char>> = OnceLock::new();
-        M.get_or_init(|| {
-            let mut m = HashMap::new();
-            // 希腊字母（小写）
-            for (n, c) in [
-                ("alpha", 'α'), ("beta", 'β'), ("gamma", 'γ'), ("delta", 'δ'),
-                ("epsilon", 'ϵ'), ("varepsilon", 'ε'), ("zeta", 'ζ'), ("eta", 'η'),
-                ("theta", 'θ'), ("vartheta", 'ϑ'), ("iota", 'ι'), ("kappa", 'κ'),
-                ("lambda", 'λ'), ("mu", 'μ'), ("nu", 'ν'), ("xi", 'ξ'), ("pi", 'π'),
-                ("varpi", 'ϖ'), ("rho", 'ρ'), ("varrho", 'ϱ'), ("sigma", 'σ'),
-                ("varsigma", 'ς'), ("tau", 'τ'), ("upsilon", 'υ'), ("phi", 'ϕ'),
-                ("varphi", 'φ'), ("chi", 'χ'), ("psi", 'ψ'), ("omega", 'ω'),
-                // 大写
-                ("Gamma", 'Γ'), ("Delta", 'Δ'), ("Theta", 'Θ'), ("Lambda", 'Λ'),
-                ("Xi", 'Ξ'), ("Pi", 'Π'), ("Sigma", 'Σ'), ("Upsilon", 'Υ'),
-                ("Phi", 'Φ'), ("Psi", 'Ψ'), ("Omega", 'Ω'),
-                // 大写数学斜体特殊
-                ("ell", 'ℓ'), ("hbar", 'ℏ'), ("imath", 'ı'), ("jmath", 'ȷ'),
-                ("wp", '℘'), ("Re", 'ℜ'), ("Im", 'ℑ'), ("aleph", 'ℵ'),
-                ("partial", '∂'), ("nabla", '∇'), ("infty", '∞'), ("emptyset", '∅'),
-                ("varnothing", '∅'),
-            ] { m.insert(n, c); }
-            // 运算符/关系/箭头
-            for (n, c) in [
-                ("times", '×'), ("div", '÷'), ("pm", '±'), ("mp", '∓'), ("cdot", '⋅'),
-                ("ast", '∗'), ("star", '⋆'), ("circ", '∘'), ("bullet", '∙'),
-                ("leq", '≤'), ("geq", '≥'), ("neq", '≠'), ("equiv", '≡'), ("sim", '∼'),
-                ("le", '≤'), ("ge", '≥'), ("ne", '≠'), ("leqq", '≦'), ("geqq", '≧'),
-                ("simeq", '≃'), ("approx", '≈'), ("cong", '≅'), ("propto", '∝'),
-                ("prec", '≺'), ("succ", '≻'), ("preceq", '⪯'), ("succeq", '⪰'),
-                ("ll", '≪'), ("gg", '≫'), ("subset", '⊂'), ("supset", '⊃'),
-                ("subseteq", '⊆'), ("supseteq", '⊇'), ("cup", '∪'), ("cap", '∩'),
-                ("setminus", '∖'), ("in", '∈'), ("ni", '∋'), ("notin", '∉'),
-                ("forall", '∀'), ("exists", '∃'), ("neg", '¬'), ("land", '∧'),
-                ("lor", '∨'), ("oplus", '⊕'), ("otimes", '⊗'), ("ominus", '⊖'),
-                ("oslash", '⊘'), ("odot", '⊙'), ("dagger", '†'), ("ddagger", '‡'),
-                ("dots", '…'), ("ldots", '…'), ("cdots", '⋯'), ("vdots", '⋮'), ("ddots", '⋱'),
-                ("prime", '′'), ("backslash", '∖'), ("angle", '∠'), ("triangle", '△'),
-                ("surd", '√'), ("succeq", '⪰'), ("in", '∈'),
-                ("to", '→'), ("rightarrow", '→'), ("leftarrow", '←'), ("leftrightarrow", '↔'),
-                ("mapsto", '↦'), ("Rightarrow", '⇒'), ("Leftarrow", '⇐'), ("Leftrightarrow", '⇔'),
-                ("uparrow", '↑'), ("downarrow", '↓'), ("updownarrow", '↕'),
-                ("hookrightarrow", '↪'), ("hookleftarrow", '↩'),
-                ("longrightarrow", '⟶'), ("longleftarrow", '⟵'), ("longleftrightarrow", '⟷'),
-                ("iff", '⟺'), ("implies", '⟹'), ("impliedby", '⟸'), ("gets", '←'),
-                ("lt", '<'), ("gt", '>'),
-                ("land", '∧'), ("lor", '∨'),
-                ("bigodot", '\u{2299}'),
-                ("bigsqcup", '\u{2A06}'),
-                ("bigstar", '\u{2605}'),
-                ("biguplus", '\u{2A04}'),
-                ("iiiint", '\u{2A0C}'),
-                ("circledast", '\u{229B}'),
-                ("circledcirc", '\u{229A}'),
-                ("circleddash", '\u{229D}'),
-                ("uplus", '\u{228E}'),
-                ("sqcup", '\u{2294}'),
-                ("sqcap", '\u{2293}'),
-                ("smallint", '\u{222B}'),
-                ("oiint", '\u{222F}'),
-                ("oiiint", '\u{2230}'),
-                ("intop", '\u{222B}'),
-                ("ulcorner", '\u{231C}'),
-                ("urcorner", '\u{231D}'),
-                ("llcorner", '\u{231E}'),
-                ("lrcorner", '\u{231F}'),
-                ("llbracket", '\u{27E6}'),
-                ("rrbracket", '\u{27E7}'),
-                ("llparenthesis", '\u{2985}'),
-                ("rrparenthesis", '\u{2986}'),
-                ("nearrow", '\u{2197}'),
-                ("searrow", '\u{2198}'),
-                ("swarrow", '\u{2199}'),
-                ("nwarrow", '\u{2196}'),
-                ("leftharpoonup", '\u{21BC}'),
-                ("leftharpoondown", '\u{21BD}'),
-                ("rightharpoonup", '\u{21C0}'),
-                ("rightharpoondown", '\u{21C1}'),
-                ("rightleftharpoons", '\u{21CC}'),
-                ("leftrightharpoons", '\u{21CB}'),
-                ("rightrightarrows", '\u{21C9}'),
-                ("leftleftarrows", '\u{21C7}'),
-                ("rightleftarrows", '\u{21C4}'),
-                ("leftrightarrows", '\u{21C6}'),
-                ("upuparrows", '\u{21C8}'),
-                ("downdownarrows", '\u{21CA}'),
-                ("upharpoonleft", '\u{21BF}'),
-                ("upharpoonright", '\u{21BE}'),
-                ("downharpoonleft", '\u{21C3}'),
-                ("downharpoonright", '\u{21C2}'),
-                ("curvearrowleft", '\u{21B6}'),
-                ("curvearrowright", '\u{21B7}'),
-                ("circlearrowleft", '\u{21BA}'),
-                ("circlearrowright", '\u{21BB}'),
-                ("looparrowleft", '\u{21AB}'),
-                ("looparrowright", '\u{21AC}'),
-                ("multimap", '\u{22B8}'),
-                ("rightsquigarrow", '\u{21DD}'),
-                ("leadsto", '\u{21DD}'),
-                ("dashrightarrow", '\u{21E2}'),
-                ("dashleftarrow", '\u{21E0}'),
-                ("twoheadrightarrow", '\u{21A0}'),
-                ("twoheadleftarrow", '\u{219E}'),
-                ("Longleftarrow", '\u{27F8}'),
-                ("Longrightarrow", '\u{27F9}'),
-                ("Longleftrightarrow", '\u{27FA}'),
-                ("Uparrow", '\u{21D1}'),
-                ("Downarrow", '\u{21D3}'),
-                ("Updownarrow", '\u{21D5}'),
-                ("nsubseteq", '\u{2288}'),
-                ("nsupseteq", '\u{2289}'),
-                ("subsetneq", '\u{228A}'),
-                ("supsetneq", '\u{228B}'),
-                ("varsubsetneq", '\u{228A}'),
-                ("varsupsetneq", '\u{228B}'),
-                ("sqsubset", '\u{228F}'),
-                ("sqsupset", '\u{2290}'),
-                ("sqsubseteq", '\u{2291}'),
-                ("sqsupseteq", '\u{2292}'),
-                ("Subset", '\u{22D0}'),
-                ("Supset", '\u{22D1}'),
-                ("owns", '\u{220B}'),
-                ("complement", '\u{2201}'),
-                ("smallsetminus", '\u{2216}'),
-                ("nleq", '\u{2270}'),
-                ("ngeq", '\u{2271}'),
-                ("nless", '\u{226E}'),
-                ("ngtr", '\u{226F}'),
-                ("nsim", '\u{2241}'),
-                ("ncong", '\u{2247}'),
-                ("nparallel", '\u{2226}'),
-                ("nmid", '\u{2224}'),
-                ("nprec", '\u{2280}'),
-                ("nsucc", '\u{2281}'),
-                ("triangleq", '\u{225C}'),
-                ("eqsim", '\u{2242}'),
-                ("approxeq", '\u{224A}'),
-                ("asymp", '\u{224D}'),
-                ("smile", '\u{2323}'),
-                ("frown", '\u{2322}'),
-                ("models", '\u{22A8}'),
-                ("vDash", '\u{22A8}'),
-                ("Vdash", '\u{22A9}'),
-                ("VDash", '\u{22AB}'),
-                ("nvdash", '\u{22AC}'),
-                ("nVdash", '\u{22AE}'),
-                ("perp", '\u{22A5}'),
-                ("parallel", '\u{2225}'),
-                ("mid", '\u{2223}'),
-                ("shortmid", '\u{2223}'),
-                ("shortparallel", '\u{2225}'),
-                ("nexists", '\u{2204}'),
-                ("lnot", '\u{00AC}'),
-                ("wedge", '\u{2227}'),
-                ("vee", '\u{2228}'),
-                ("impliedby", '\u{27F8}'),
-                ("iff", '\u{27FA}'),
-                ("blacklozenge", '\u{25C6}'),
-                ("diamond", '\u{22C4}'),
-                ("lozenge", '\u{25CA}'),
-                ("boxplus", '\u{229E}'),
-                ("boxminus", '\u{229F}'),
-                ("boxtimes", '\u{22A0}'),
-                ("boxdot", '\u{22A1}'),
-                ("dotplus", '\u{2214}'),
-                ("divideontimes", '\u{22C7}'),
-                ("ltimes", '\u{22C9}'),
-                ("rtimes", '\u{22CA}'),
-                ("leftthreetimes", '\u{22CB}'),
-                ("rightthreetimes", '\u{22CC}'),
-                ("barwedge", '\u{22BC}'),
-                ("veebar", '\u{22BB}'),
-                ("doublebarwedge", '\u{2A5E}'),
-                ("curlywedge", '\u{22CF}'),
-                ("curlyvee", '\u{22CE}'),
-                ("Cup", '\u{22D3}'),
-                ("Cap", '\u{22D2}'),
-                ("intercal", '\u{22BA}'),
-                ("triangle", '\u{25B3}'),
-                ("blacktriangle", '\u{25B2}'),
-                ("blacktriangledown", '\u{25BC}'),
-                ("blacktriangleleft", '\u{25C0}'),
-                ("blacktriangleright", '\u{25B6}'),
-                ("blacksquare", '\u{25A0}'),
-                ("square", '\u{25A1}'),
-                ("Box", '\u{25A1}'),
-                ("Diamond", '\u{25C7}'),
-            ] { m.insert(n, c); }
-            m
-        })
-    }
-    table().get(name).copied()
+    symbol_map().get(name).copied()
+}
+
+/// 符号表全量导出（命令名 → Unicode 字符），按命令名排序。
+///
+/// 供自检工具遍历用：每个已登记的命令都必须能在字体里找到字形，
+/// 否则用户会看到一个豆腐块——这类问题肉眼翻表翻不出来。
+pub fn symbol_table() -> Vec<(&'static str, char)> {
+    let mut v: Vec<(&'static str, char)> = symbol_map().iter().map(|(k, c)| (*k, *c)).collect();
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    v
 }
 
 /// 多个子表达式横向排列：共享基线，累加宽度。
@@ -605,12 +638,20 @@ fn layout_row(font: &MathFont, items: &[Expr], style: Style) -> Box {
             if gap > 0.0 { out.width += gap; }
         }
         prev_class = cls;
-        let shifted = translate(&child, out.width, 0.0);
-        out.width += child.width;
+        // 直接按偏移 push，不再先 translate 出一份中间 Box：
+        // 长行（几百项）下每次 append 都多一次全量复制，整体会退化成 O(n²)。
+        let base_x = out.width;
+        out.glyphs.reserve(child.glyphs.len());
+        out.rules.reserve(child.rules.len());
+        for g in &child.glyphs {
+            out.glyphs.push(PlacedGlyph { x: g.x + base_x, y: g.y, ..*g });
+        }
+        for r in &child.rules {
+            out.rules.push(Rule { x: r.x + base_x, ..*r });
+        }
+        out.width = base_x + child.width;
         out.height = out.height.max(child.height);
         out.depth = out.depth.max(child.depth);
-        out.glyphs.extend_from_slice(&shifted.glyphs);
-        out.rules.extend_from_slice(&shifted.rules);
     }
     out
 }

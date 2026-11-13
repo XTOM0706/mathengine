@@ -29,6 +29,8 @@ import sys
 RANGES = ",".join([
     "U+0020-007E",
     "U+00A0-00FF",
+    "U+0100-017F",   # Latin 扩展 A：ı（dotless i）
+    "U+0180-024F",   # Latin 扩展 B：ȷ（dotless j）
     "U+02B0-02FF",   # 修饰字母：\hat 用的 ^、\bar 的 ¯、\dot 的 ˙、\tilde 的 ˜
     "U+0370-03FF",
     "U+2000-22FF",
@@ -36,8 +38,9 @@ RANGES = ",".join([
     "U+2A00-2AFF",   # 运算符补充：⩞ 等 doublebarwedge 用到的符号
     "U+2300-23FF",   # 杂项技术符号：⌜ ⌝ ⌞ ⌟
     "U+27C0-27EF",   # 数学符号补充 A：⟦ ⟧ 等
+    "U+27F0-27FF",   # 补充箭头 A：⟸ ⟹ ⟺ ⟵ ⟶ ⟷
     "U+2980-29FF",   # 数学符号补充 B：⦅ ⦆ ⦇ ⦈ 等
-    "U+2605",        # ★ bigstar
+    "U+2666",        # ♦ blacklozenge 的替代字形（LM Math 没有实心菱形）
     "U+2100-214F",
     # 数学字母区：\\mathbb \\mathbf \\mathcal \\mathfrak \\mathsf \\mathit 的目标码点
     "U+1D400-1D433", "U+1D434-1D467", "U+1D49C-1D4CF", "U+1D504-1D537",

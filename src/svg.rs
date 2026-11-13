@@ -66,8 +66,10 @@ impl OutlineBuilder for PathBuilder {
     }
 }
 
-fn glyph_path(face: &Face, gid: u16, scale: f32) -> Option<String> {
-    let mut b = PathBuilder::new(scale);
+/// 字形轮廓（字体原始单位，1 upem = 1.0）。缩放交给 SVG 的 transform，
+/// 这样同一个字形 id 的 path 可以被缓存复用——大矩阵里同一个字符会出现几十次。
+fn glyph_path(face: &Face, gid: u16) -> Option<String> {
+    let mut b = PathBuilder::new(1.0);
     face.outline_glyph(GlyphId(gid), &mut b)?;
     if b.d.is_empty() {
         None
@@ -112,6 +114,8 @@ pub fn render(font: &MathFont, latex: &str, size: f32) -> Result<Rendered, Strin
     let face = font.face_ref().ok_or_else(|| "字体没有 face".to_string())?;
     let mut body = String::new();
     let mut missing = 0usize;
+    // 字形 id → 轮廓 path。同一字符在长公式里重复率高，缓存能省掉绝大部分轮廓解析。
+    let mut cache: std::collections::HashMap<u16, String> = std::collections::HashMap::new();
 
     for g in &l.glyphs {
         // 不能走 MathFont::glyph_id —— 它会再做一次数学斜体映射，
@@ -120,13 +124,20 @@ pub fn render(font: &MathFont, latex: &str, size: f32) -> Result<Rendered, Strin
             missing += 1;
             continue;
         };
-        let Some(d) = glyph_path(face, gid.0, g.scale) else { continue };
+        let d = match cache.get(&gid.0) {
+            Some(cached) => cached,
+            None => {
+                let Some(computed) = glyph_path(face, gid.0) else { continue };
+                cache.insert(gid.0, computed);
+                cache.get(&gid.0).expect("刚插入")
+            }
+        };
         let _ = write!(
             body,
             r#"<path transform="translate({:.2} {:.2}) scale({:.6})" d="{}"/>"#,
             g.x * k,
             base_y - g.y * k,
-            k,
+            k * g.scale,
             d
         );
         body.push('\n');

@@ -335,8 +335,16 @@ impl Parser {
                 Ok(Expr::Symbol(".".into()))
             }
             // ---- 标点/空格命令：当作符号（布局层给宽度）----
-            "," | ";" | ":" | "!" | "quad" | "qquad" | "enspace" | "thinspace" | "negthinspace" => {
-                Ok(Expr::Symbol(name))
+            "," | ";" | ":" | "!" | "quad" | "qquad" | "enspace" | "thinspace"
+            | "negthinspace" | " " | "medspace" | "thickspace" => Ok(Expr::Symbol(name)),
+            // 透明命令：只影响样式或排版参数，这里宽容地当无操作。
+            // `\leftroot`/`\uproot` 带一个参数，要吃掉，否则 `{-2}` 会被当成公式内容画出来。
+            "displaystyle" | "textstyle" | "scriptstyle" | "scriptscriptstyle" | "mathstrut" => {
+                Ok(Expr::Row(vec![]))
+            }
+            "leftroot" | "uproot" => {
+                let _ = self.parse_required_group("root adjustment")?;
+                Ok(Expr::Row(vec![]))
             }
             // ---- 已知符号命令全集（渲染层查表给 glyph）----
             _ => {
