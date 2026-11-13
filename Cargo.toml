@@ -17,11 +17,12 @@ default = []
 jni = ["dep:jni"]
 
 [dependencies]
-ttf-parser = { version = "0.21", features = ["opentype-layout"] }
+ttf-parser = { version = "0.21", default-features = false, features = ["opentype-layout"] }
 jni = { version = "0.21", optional = true }
 
 [profile.release]
-opt-level = 3
+opt-level = "s"
 lto = true
 strip = true
 panic = "unwind"
+codegen-units = 1

@@ -90,7 +90,9 @@ void arix_math_free(ArixMathLayout* layout);
 | 单元测试 | 58 个 |
 | 集成测试 | 7 个（只走公共 API） |
 | 运行时依赖 | 无（仅 `ttf-parser` 编译期依赖） |
-| 附带字体 | Latin Modern Math，约 720 KB |
+| 附带字体 | Latin Modern Math 子集，263 KB（4802 → 1853 字形，见 `tools/subset_font.py`） |
+| release `.so` | 520 KB（x86_64，`opt-level=s` + LTO + strip + 单代码单元） |
+| 合计 | 约 777 KB；宿主若自带字体则只需 520 KB |
 | 布局耗时（本机，15 条公式 30000 次采样） | 中位 3.04 µs，p95 8.23 µs |
 | 与 jlatexmath 1.0.7 对比 | 整体约快 1.5 倍，矩阵快 5 倍，求和略慢 |
 
