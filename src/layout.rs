@@ -11,7 +11,7 @@
 //! 度量来源全部是 [crate::font::MathFont]（Latin Modern Math 的 cmap/hmtx/MATH 表）。
 //! 单位 = font units；Kotlin 侧缩放。
 
-use crate::ast::Expr;
+use crate::ast::{Expr, FontStyle};
 use crate::font::MathFont;
 
 /// 一个已放置的 glyph（相对布局基线的绝对位置，font units）。
@@ -97,6 +97,129 @@ pub fn layout(font: &MathFont, ast: &Expr) -> Layout {
 /// 递归布局。返回的 glyph 坐标是**相对本盒基线**的——调用方（Row）负责加水平偏移。
 /// 但为简化，「绝对化」在每一层由父盒完成：子盒布局时坐标系以子盒基线为原点，
 /// 父盒把子盒整个平移（glyphs 里每个 x += dx，y += dy）。
+/// 把字母映射到对应数学字体族的 Unicode 码点。
+///
+/// 各区块里都有几个字母在 Unicode 中被单独编在别处（花体的 B/E/F/H/I/L/M/R、
+/// 哥特体的 C/H/I/R/Z、双线体的 C/H/N/P/Q/R/Z），必须逐个列出来，否则会画出豆腐。
+
+/// 数学斜体码点 → ASCII。用于字体族切换前还原。
+fn unitalic(ch: char) -> char {
+    let c = ch as u32;
+    if (0x1D434..=0x1D44D).contains(&c) {
+        return char::from_u32(0x41 + (c - 0x1D434)).unwrap_or(ch);
+    }
+    if (0x1D44E..=0x1D467).contains(&c) {
+        return char::from_u32(0x61 + (c - 0x1D44E)).unwrap_or(ch);
+    }
+    if c == 0x210E {
+        return 'h';
+    }
+    ch
+}
+
+fn map_font_style(fs: FontStyle, ch: char) -> char {
+    // 布局原子时字母已被映射成数学斜体码点（TeX 变量默认斜体），
+    // 所以这里要先把斜体码点还原成 ASCII，才能套上 `\mathbb` 这类目标字体。
+    // 不还原的话，`\mathbb{R}` 里的 R 已经是 𝑅，不在 A-Z 区间，会被整条跳过。
+    let ch = unitalic(ch);
+    let c = ch as u32;
+    let upper = (0x41..=0x5A).contains(&c);
+    let lower = (0x61..=0x7A).contains(&c);
+    if !upper && !lower {
+        return ch;
+    }
+    let idx = if upper { c - 0x41 } else { c - 0x61 };
+    let mapped = match fs {
+        FontStyle::Upright => return ch,
+        FontStyle::Bold => {
+            if upper { 0x1D400 + idx } else { 0x1D41A + idx }
+        }
+        FontStyle::Italic => match ch {
+            'h' => 0x210E,
+            _ => if upper { 0x1D434 + idx } else { 0x1D44E + idx },
+        },
+        FontStyle::Script => match ch {
+            'B' => 0x212C, 'E' => 0x2130, 'F' => 0x2131, 'H' => 0x210B,
+            'I' => 0x2110, 'L' => 0x2112, 'M' => 0x2133, 'R' => 0x211B,
+            'e' => 0x212F, 'g' => 0x210A, 'o' => 0x2134,
+            _ => if upper { 0x1D49C + idx } else { 0x1D4B6 + idx },
+        },
+        FontStyle::Fraktur => match ch {
+            'C' => 0x212D, 'H' => 0x210C, 'I' => 0x2111, 'R' => 0x211C, 'Z' => 0x2128,
+            _ => if upper { 0x1D504 + idx } else { 0x1D51E + idx },
+        },
+        FontStyle::DoubleStruck => match ch {
+            'C' => 0x2102, 'H' => 0x210D, 'N' => 0x2115, 'P' => 0x2119,
+            'Q' => 0x211A, 'R' => 0x211D, 'Z' => 0x2124,
+            _ => if upper { 0x1D538 + idx } else { 0x1D552 + idx },
+        },
+        FontStyle::SansSerif => {
+            if upper { 0x1D5A0 + idx } else { 0x1D5BA + idx }
+        }
+    };
+    char::from_u32(mapped).unwrap_or(ch)
+}
+
+
+/// `\overset` / `\underset` / `\stackrel`：base 留在基线，另一个压在它上方或下方。
+fn layout_stack(
+    font: &MathFont,
+    base: &Expr,
+    top: Option<&Expr>,
+    bottom: Option<&Expr>,
+    style: Style,
+) -> Box {
+    let scale = style.scale_of(font);
+    let base_box = layout_box(font, base, style);
+    let gap = font.units_per_em() * 0.1 * scale;
+    let mut out = base_box.clone();
+    if let Some(t) = top {
+        let tb = layout_box(font, t, Style::Script);
+        let dx = (base_box.width - tb.width) / 2.0;
+        let dy = base_box.height + gap + tb.depth;
+        merge_at(&mut out, &tb, dx, dy);
+        out.height = out.height.max(dy + tb.height);
+        out.width = out.width.max(base_box.width);
+    }
+    if let Some(b) = bottom {
+        let bb = layout_box(font, b, Style::Script);
+        let dx = (base_box.width - bb.width) / 2.0;
+        let dy = -(base_box.depth + gap + bb.height);
+        merge_at(&mut out, &bb, dx, dy);
+        out.depth = out.depth.max(-dy + bb.depth);
+        out.width = out.width.max(base_box.width);
+    }
+    out
+}
+
+/// `\substack{a\\b}`：多行小字垂直堆叠，整体水平居中。用于求和号的下限之类。
+fn layout_lines(font: &MathFont, lines: &[Expr], style: Style) -> Box {
+    if lines.is_empty() {
+        return Box::empty();
+    }
+    let scale = style.scale_of(font);
+    let boxes: Vec<Box> = lines.iter().map(|l| layout_box(font, l, Style::Script)).collect();
+    let width = boxes.iter().map(|b| b.width).fold(0.0, f32::max);
+    let gap = font.units_per_em() * 0.08 * scale;
+
+    let mut out = Box::empty();
+    // 第一行坐在基线上，后面的行依次往下排；整体高度/深度按实际算，
+    // 否则整个盒子都沉到基线下、height=0，单独渲染时顶部会被切掉。
+    let mut baseline = 0.0f32;
+    let mut prev_depth = 0.0f32;
+    for (i, b) in boxes.iter().enumerate() {
+        if i > 0 {
+            baseline -= prev_depth + gap + b.height;
+        }
+        merge_at(&mut out, b, (width - b.width) / 2.0, baseline);
+        prev_depth = b.depth;
+    }
+    out.width = width;
+    out.height = out.height.max(0.0);
+    out.depth = out.depth.max(0.0);
+    out
+}
+
 fn layout_box(font: &MathFont, expr: &Expr, style: Style) -> Box {
     let scale = style.scale_of(font);
     match expr {
@@ -126,6 +249,27 @@ fn layout_box(font: &MathFont, expr: &Expr, style: Style) -> Box {
         Expr::Matrix { env, rows } => layout_matrix(font, env, rows, style),
         Expr::Accent { name, body } => layout_accent(font, name, body.as_ref(), style),
         Expr::Line { name, body } => layout_line(font, name, body.as_ref(), style),
+        Expr::Stack { base, top, bottom } => layout_stack(font, base.as_ref(), top.as_deref(), bottom.as_deref(), style),
+        Expr::Lines(lines) => layout_lines(font, lines, style),
+        Expr::Phantom { body, keep_w, keep_h } => {
+            let b = layout_box(font, body, style);
+            Box {
+                width: if *keep_w { b.width } else { 0.0 },
+                height: if *keep_h { b.height } else { 0.0 },
+                depth: if *keep_h { b.depth } else { 0.0 },
+                glyphs: vec![],
+                rules: vec![],
+            }
+        }
+        Expr::Styled { style: fs, body } => {
+            // 先按原样布局，再把每个字形的码点换成对应数学字母区。
+            // 数学字母区的字宽与普通字母一致，位置不必重算。
+            let mut b = layout_box(font, body, style);
+            for g in &mut b.glyphs {
+                g.ch = map_font_style(*fs, g.ch);
+            }
+            b
+        }
         Expr::Unknown(_) => Box::empty(),
     }
 }
@@ -288,6 +432,14 @@ fn symbol_to_char(name: &str) -> Option<char> {
                 ("iff", '⟺'), ("implies", '⟹'), ("impliedby", '⟸'), ("gets", '←'),
                 ("lt", '<'), ("gt", '>'),
                 ("land", '∧'), ("lor", '∨'),
+                ("bigodot", '\u{2299}'),
+                ("bigsqcup", '\u{2A06}'),
+                ("bigstar", '\u{2605}'),
+                ("biguplus", '\u{2A04}'),
+                ("iiiint", '\u{2A0C}'),
+                ("circledast", '\u{229B}'),
+                ("circledcirc", '\u{229A}'),
+                ("circleddash", '\u{229D}'),
                 ("uplus", '\u{228E}'),
                 ("sqcup", '\u{2294}'),
                 ("sqcap", '\u{2293}'),
@@ -433,14 +585,26 @@ fn layout_row(font: &MathFont, items: &[Expr], style: Style) -> Box {
     let mut prev_class = MClass::Ord;
     // merge 的宽度语义是 max（用于纵向堆叠/重叠），行的宽度必须**累加**——
     // 每项平移到当前累计 x，然后 out.width += 该项宽度。
-    for item in items {
+    // TeX 规则：行首的二元运算符当一元用（`-x` 的减号不是 Bin 而是 Ord），
+    // 行尾的 Bin 同理当作 Ord。不处理的话 `-x` 会多出二元运算符两侧的间距。
+    let classes: Vec<MClass> = items.iter().map(math_class).collect();
+    let n_items = classes.len();
+    for (idx, item) in items.iter().enumerate() {
         let child = layout_box(font, item, style);
+        let mut cls = classes[idx];
+        if cls == MClass::Bin && (idx == 0 || idx + 1 == n_items) {
+            cls = MClass::Ord;
+        }
+        let mut prev = prev_class;
+        if prev == MClass::Bin && idx == 1 {
+            prev = MClass::Ord;
+        }
         // TeX 数学间距：相邻两项类别查表插空（mu 间距，1mu=1/18em）
         if out.glyphs.len() > 0 || out.width > 0.0 {
-            let gap = math_spacing(prev_class, math_class(item));
+            let gap = math_spacing(prev, cls);
             if gap > 0.0 { out.width += gap; }
         }
-        prev_class = math_class(item);
+        prev_class = cls;
         let shifted = translate(&child, out.width, 0.0);
         out.width += child.width;
         out.height = out.height.max(child.height);
@@ -589,7 +753,8 @@ fn layout_stacked(
     let rule_y = -font.axis_height * scale;
     // 无分数线（binom）时上下要拉开更多，否则 n 和 k 几乎贴在一起
     let gap = ups * (if has_rule { 0.12 } else { 0.26 }) * scale;
-    let thickness = ups * 0.06 * scale;
+    // TeX 的 default_rule_thickness 是 0.4pt @10pt = 0.04em，原实现 0.06em 偏粗
+    let thickness = ups * 0.04 * scale;
 
     // 分子底到分数线的距离、分母顶到分数线的距离都 ≥ gap（y 向上为正，rule_y 在基线下方）：
     //   分子底 = rule_y + gap → 分子基线 = 底 + depth
@@ -1326,5 +1491,72 @@ mod regression {
             let diff = (acc.x - body.x).abs();
             assert!(diff < f.advance(body.ch) * 0.5, "{src}: 重音偏移过大 {diff}");
         }
+    }
+}
+
+/// 字体族与堆叠的回归测试（2026-11-13 按真实文档对齐 TeX）。
+#[cfg(test)]
+mod tex_align {
+    use super::*;
+    use crate::ast::parse;
+
+    fn font() -> MathFont<'static> {
+        let data = crate::font::load_latin_modern_math(crate::LM_MATH_OTF).expect("字体存在");
+        let bytes: &'static [u8] = std::boxed::Box::leak(data.into_boxed_slice());
+        MathFont::from_bytes(bytes).expect("字体可解析")
+    }
+
+    #[test]
+    fn 字体族映射到数学字母区() {
+        let f = font();
+        let l = layout(&f, &parse(r"\mathbb{R}").unwrap());
+        assert_eq!(l.glyphs[0].ch, 'ℝ', "\\mathbb{{R}} 应映射到 U+211D");
+        let l = layout(&f, &parse(r"\mathbf{A}").unwrap());
+        assert_eq!(l.glyphs[0].ch as u32, 0x1D400);
+        let l = layout(&f, &parse(r"\mathcal{L}").unwrap());
+        assert_eq!(l.glyphs[0].ch, 'ℒ');
+        let l = layout(&f, &parse(r"\mathfrak{g}").unwrap());
+        assert_eq!(l.glyphs[0].ch as u32, 0x1D524);
+    }
+
+    #[test]
+    fn 字体族不缺字形() {
+        let f = font();
+        for src in [r"\mathbb{RNCZQ}", r"\mathcal{BCEFHILMR}", r"\mathfrak{CHIRZ}"] {
+            let l = layout(&f, &parse(src).unwrap());
+            for g in &l.glyphs {
+                assert!(f.glyph_id(g.ch).is_some(), "{src}: {:?} 缺字形", g.ch);
+            }
+        }
+    }
+
+    #[test]
+    fn overset在基线上方() {
+        let f = font();
+        let l = layout(&f, &parse(r"\overset{a}{=}").unwrap());
+        let base = l.glyphs.iter().find(|g| g.ch == '=').expect("等号");
+        let top = l.glyphs.iter().find(|g| g.ch != '=').expect("上标项");
+        assert!(top.y > base.y, "overset 的 a 应在等号上方");
+    }
+
+    #[test]
+    fn underset在基线下方() {
+        let f = font();
+        let l = layout(&f, &parse(r"\underset{x}{\lim}").unwrap());
+        assert!(
+            l.glyphs.iter().any(|g| g.y < 0.0),
+            "underset 应有字形落在基线下方"
+        );
+    }
+
+    #[test]
+    fn substack多行不重叠() {
+        let f = font();
+        let l = layout(&f, &parse(r"\substack{a\\b}").unwrap());
+        let mut ys: Vec<f32> = l.glyphs.iter().map(|g| g.y).collect();
+        ys.sort_by(|a, b| b.partial_cmp(a).unwrap());
+        assert_eq!(ys.len(), 2, "应有两行各一个字符");
+        assert!(ys[0] > ys[1], "第一行应在第二行上方: {ys:?}");
+        assert!(l.height > 0.0, "整体高度应为正");
     }
 }

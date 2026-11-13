@@ -12,6 +12,25 @@
 
 use crate::token::{Token, tokenize};
 
+/// 数学字体族（`\mathbb` 这类命令）。TeX 里它们把字母换成 Unicode 数学字母区的码点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontStyle {
+    /// `\mathbb`：双线体（ℂ ℕ ℝ …）
+    DoubleStruck,
+    /// `\mathbf` / `\boldsymbol`：粗体
+    Bold,
+    /// `\mathcal` / `\mathscr`：花体
+    Script,
+    /// `\mathfrak`：哥特体
+    Fraktur,
+    /// `\mathsf`：无衬线
+    SansSerif,
+    /// `\mathit`：斜体
+    Italic,
+    /// `\mathrm`：正体（不做码点映射）
+    Upright,
+}
+
 /// 数学 AST。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -49,6 +68,23 @@ pub enum Expr {
     Accent { name: String, body: Box<Expr> },
     /// 上下划线（`\overline{ab}` / `\underline{ab}`）：name 是 `overline`/`underline`。
     Line { name: String, body: Box<Expr> },
+    /// 字体族包裹（`\mathbb{R}`）：布局时把字母映射到对应数学字母区。
+    Styled { style: FontStyle, body: Box<Expr> },
+    /// `\overset{top}{base}` / `\underset{bottom}{base}` / `\stackrel{top}{base}`。
+    Stack {
+        base: Box<Expr>,
+        top: Option<Box<Expr>>,
+        bottom: Option<Box<Expr>>,
+    },
+    /// `\substack{a\\b}`：多行小字堆叠（常用于求和/并集的上下限）。
+    Lines(Vec<Expr>),
+    /// 占位：保留尺寸但不绘制。keep_w/keep_h 决定保留哪一维。
+    /// phantom 两维都留，hphantom 只留宽，vphantom 只留高深，smash 保留宽度、高度深度归零。
+    Phantom {
+        body: Box<Expr>,
+        keep_w: bool,
+        keep_h: bool,
+    },
     /// 未识别命令（渲染层原文回退）。
     Unknown(String),
 }
@@ -101,7 +137,16 @@ fn walk_unknown(e: &Expr, out: &mut Vec<String>) {
                 for cell in row { walk_unknown(cell, out); }
             }
         }
-        Expr::Accent { body, .. } | Expr::Line { body, .. } => walk_unknown(body, out),
+        Expr::Accent { body, .. } | Expr::Line { body, .. } | Expr::Styled { body, .. } => {
+            walk_unknown(body, out)
+        }
+        Expr::Stack { base, top, bottom } => {
+            walk_unknown(base, out);
+            if let Some(t) = top { walk_unknown(t, out); }
+            if let Some(b) = bottom { walk_unknown(b, out); }
+        }
+        Expr::Lines(v) => v.iter().for_each(|e| walk_unknown(e, out)),
+        Expr::Phantom { body, .. } => walk_unknown(body, out),
         // 叶子节点，不会有 Unknown
         Expr::Atom { .. } | Expr::Symbol(_) | Expr::Text(_) => {}
     }
@@ -173,6 +218,57 @@ impl Parser {
             | "dot" | "ddot" | "widehat" | "widetilde" => {
                 let body = self.parse_required_group("accent body")?;
                 Ok(Expr::Accent { name, body: Box::new(body) })
+            }
+            // ---- 占位：保留尺寸但不绘制 ----
+            "phantom" | "hphantom" | "vphantom" | "smash" => {
+                let (keep_w, keep_h) = match name.as_str() {
+                    "phantom" => (true, true),
+                    "hphantom" => (true, false),
+                    "vphantom" => (false, true),
+                    _ => (true, false),   // smash：保留宽度，高度深度归零
+                };
+                let body = self.parse_required_group("phantom body")?;
+                Ok(Expr::Phantom { body: Box::new(body), keep_w, keep_h })
+            }
+            // ---- 堆叠：\\overset{top}{base} / \\underset{bottom}{base} / \\stackrel{top}{base} ----
+            "overset" | "stackrel" => {
+                let top = self.parse_required_group("overset top")?;
+                let base = self.parse_required_group("overset base")?;
+                Ok(Expr::Stack { base: Box::new(base), top: Some(Box::new(top)), bottom: None })
+            }
+            "underset" => {
+                let bottom = self.parse_required_group("underset bottom")?;
+                let base = self.parse_required_group("underset base")?;
+                Ok(Expr::Stack { base: Box::new(base), top: None, bottom: Some(Box::new(bottom)) })
+            }
+            "substack" => {
+                let mut lines = Vec::new();
+                if matches!(self.peek(), Some(Token::BeginGroup)) {
+                    self.next();
+                    loop {
+                        lines.push(self.parse_row(true)?);
+                        match self.peek() {
+                            Some(Token::Eol) => { self.next(); }
+                            Some(Token::EndGroup) => { self.next(); break; }
+                            _ => break,
+                        }
+                    }
+                }
+                Ok(Expr::Lines(lines))
+            }
+            // ---- 字体族：\\mathbb{R} 这类，把参数里的字母换成对应数学字母区 ----
+            "mathbb" | "mathbf" | "mathcal" | "mathscr" | "mathfrak" | "mathsf" | "mathit"
+            | "boldsymbol" => {
+                let fs = match name.as_str() {
+                    "mathbb" => FontStyle::DoubleStruck,
+                    "mathbf" | "boldsymbol" => FontStyle::Bold,
+                    "mathcal" | "mathscr" => FontStyle::Script,
+                    "mathfrak" => FontStyle::Fraktur,
+                    "mathsf" => FontStyle::SansSerif,
+                    _ => FontStyle::Italic,
+                };
+                let body = self.parse_required_group("styled body")?;
+                Ok(Expr::Styled { style: fs, body: Box::new(body) })
             }
             // ---- 上下划线 ----
             "overline" | "underline" => {
@@ -524,6 +620,7 @@ fn looks_like_greek_or_symbol(name: &str) -> bool {
         "big","Big","bigg","Bigg","bigl","bigr","Bigl","Bigr","biggl","biggr","Biggl","Biggr",
         "left","right","middle","mathopen","mathclose","mathrel","mathbin","mathord","mathop",
         // 2026-11-13 按真实文档补齐的符号命令
+        "bigodot","bigsqcup","bigstar","biguplus","iiiint","circledast","circledcirc","circleddash",
         "uplus","sqcup","sqcap","smallint","oiint","oiiint","intop","ulcorner","urcorner","llcorner","lrcorner","llbracket","rrbracket","llparenthesis","rrparenthesis",
         "nearrow","searrow","swarrow","nwarrow","leftharpoonup","leftharpoondown","rightharpoonup","rightharpoondown","rightleftharpoons","leftrightharpoons","rightrightarrows","leftleftarrows","rightleftarrows","leftrightarrows","upuparrows","downdownarrows","upharpoonleft","upharpoonright","downharpoonleft","downharpoonright","curvearrowleft","curvearrowright","circlearrowleft","circlearrowright","looparrowleft","looparrowright","multimap","rightsquigarrow","leadsto","dashrightarrow","dashleftarrow","twoheadrightarrow","twoheadleftarrow","Longleftarrow","Longrightarrow","Longleftrightarrow","Uparrow","Downarrow","Updownarrow","nsubseteq","nsupseteq","subsetneq","supsetneq","varsubsetneq","varsupsetneq","sqsubset","sqsupset","sqsubseteq","sqsupseteq","Subset","Supset","owns","complement","smallsetminus","nleq","ngeq","nless","ngtr","nsim","ncong","nparallel","nmid","nprec","nsucc","triangleq","eqsim","approxeq","asymp","smile","frown","models","vDash","Vdash","VDash","nvdash","nVdash","perp","parallel","mid","shortmid","shortparallel","nexists","lnot","wedge","vee","impliedby","iff","blacklozenge","diamond","lozenge","boxplus","boxminus","boxtimes","boxdot","dotplus","divideontimes","ltimes","rtimes","leftthreetimes","rightthreetimes","barwedge","veebar","doublebarwedge","curlywedge","curlyvee","Cup","Cap","intercal","triangle","blacktriangle","blacktriangledown","blacktriangleleft","blacktriangleright","blacksquare","square","Box","Diamond",
     ];
