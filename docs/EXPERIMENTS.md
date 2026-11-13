@@ -338,3 +338,28 @@ cargo run --release --example batch -- docs/cases-document.txt
 - 大运算符单独出现时上下留白偏多，因为按 display 样式的 limits 空间预留。
 
 这些都属于参数微调（TeX 的 `sup_shift_up` / `sub_shift_down` / `num3` 等），不是结构问题。
+
+## 实验十一：两处几何 bug
+
+上一节列的「参数瑕疵」里有两条其实是**坐标算错**，不是调参问题。
+
+### 1. 分数线画在了基线下方
+
+```rust
+let rule_y = -font.axis_height * scale;   // 旧
+let rule_y =  font.axis_height * scale;   // 新
+```
+
+TeX 的分数线画在**数学轴**上，轴在基线**上方**约 0.25em。写成负号等于把整条分数线沉到基线下方，于是整个分式比正确位置低半个 em——行内 `\frac{\rho}{\varepsilon_0}` 看起来像在往下掉。
+
+### 2. MATH 表常量没有跟着样式缩放
+
+`layout_scripts` 从字体的 MATH 表读 `superscriptShiftUp`、`subscriptShiftDown`、`subSuperscriptGapMin`。这些值以设计单位给出（1em = upem），但 `base_box` 已经按当前样式缩放过（`\scriptstyle` 是 0.7）。
+
+不乘 `scale` 的后果：在分子、上下标这些缩小的上下文里，**上标相对 base 偏低**。具体表现就是 `\frac{x^2}{a^2}` 里的 2 压在分数线上，以及下标贴到字母身上。
+
+两处都改完后，分式与上下标的位置回到正常。
+
+### 3. 脚本右侧留空隙
+
+上标的最后一个字形常是斜体，墨迹会向右探出 advance。不留空隙时 `a^{n-k}b^k` 里的 k 会和 b 挤在一起。现在在脚本宽度后加 `0.04em`。

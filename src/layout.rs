@@ -743,9 +743,18 @@ fn layout_scripts(
 
     let math = font.face_ref().and_then(|f| f.tables().math);
     let constants = math.and_then(|m| m.constants);
-    let sup_shift = constants.map(|c| c.superscript_shift_up().value as f32).unwrap_or(ups * 0.5 * scale);
-    let sub_shift = constants.map(|c| c.subscript_shift_down().value as f32).unwrap_or(ups * 0.22 * scale);
-    let gap_min = constants.map(|c| c.sub_superscript_gap_min().value as f32).unwrap_or(ups * 0.1 * scale);
+    // MATH 表里的常量是**设计单位**（1em = upem），而 base_box 已经按当前样式缩放过。
+    // 读数后必须乘 scale，否则在 script 样式（0.7）里上标相对 base 会偏低，
+    // 表现为 x^2 的 2 压在分数线上、下标贴到字母身上。
+    let sup_shift = constants
+        .map(|c| c.superscript_shift_up().value as f32 * scale)
+        .unwrap_or(ups * 0.5 * scale);
+    let sub_shift = constants
+        .map(|c| c.subscript_shift_down().value as f32 * scale)
+        .unwrap_or(ups * 0.22 * scale);
+    let gap_min = constants
+        .map(|c| c.sub_superscript_gap_min().value as f32 * scale)
+        .unwrap_or(ups * 0.1 * scale);
 
     // 先布局 sub/sup，算好各自尺寸
     let sub_box = sub.map(|s| layout_box(font, s, Style::Script));
@@ -778,8 +787,11 @@ fn layout_scripts(
     }
 
     // 宽度：base + max(sub, sup) 宽度（TeX：脚本并列，取最宽）
+    // 脚本右侧留一点空隙：上标的最后一个字形往往是斜体，墨迹会向右探出 advance，
+    // 不留空隙时 `a^{n-k}b` 里的 k 会和 b 贴在一起。
     let sw = sub_box.as_ref().map(|b| b.width).unwrap_or(0.0)
-        .max(sup_box.as_ref().map(|b| b.width).unwrap_or(0.0));
+        .max(sup_box.as_ref().map(|b| b.width).unwrap_or(0.0))
+        + ups * 0.04 * scale;
     out.width = base_box.width + sw;
     out
 }
@@ -798,7 +810,10 @@ fn layout_stacked(
     let den_box = layout_box(font, den, Style::Script);
 
     // 分数线 y = -axis（在轴线下方一点；TeX：rule 中心在轴线上）
-    let rule_y = -font.axis_height * scale;
+    // TeX 的分数线画在**数学轴**上，轴在基线**上方**约 0.25em。
+    // 原来写成 -axis_height，整条分数线沉到基线下方，于是整个分式比正常位置低半个 em，
+    // 行内 `\frac{\rho}{\varepsilon_0}` 看着像往下掉。
+    let rule_y = font.axis_height * scale;
     // 无分数线（binom）时上下要拉开更多，否则 n 和 k 几乎贴在一起
     let gap = ups * (if has_rule { 0.12 } else { 0.26 }) * scale;
     // TeX 的 default_rule_thickness 是 0.4pt @10pt = 0.04em，原实现 0.06em 偏粗
