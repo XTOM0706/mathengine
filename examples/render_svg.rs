@@ -97,7 +97,9 @@ fn main() {
     let mut body = String::new();
 
     for g in &l.glyphs {
-        let Some(gid) = font.glyph_id(g.ch) else { continue };
+        // 注意：不能走 MathFont::glyph_id —— 它会再做一次数学斜体映射。
+        // 布局层已经决定这个字符该正体还是斜体（lim/sin/log 是正体），这里必须照字符原样取字形。
+        let Some(gid) = face.glyph_index(g.ch).map(|i| i.0) else { continue };
         // 轮廓本身是 font units，乘 g.scale 后再交给 SvgPath 统一换算
         let Some(d) = glyph_path(face, gid, g.scale) else { continue };
         let _ = write!(

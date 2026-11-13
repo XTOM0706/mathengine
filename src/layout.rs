@@ -110,9 +110,32 @@ fn layout_box(font: &MathFont, expr: &Expr, style: Style) -> Box {
         Expr::Frac { num, den } => layout_fraction(font, num.as_ref(), den.as_ref(), style),
         Expr::Sqrt { degree, body } => layout_sqrt(font, degree.as_deref(), body.as_ref(), style),
         Expr::Binom { n, k } => {
-            // 二项式 ≈ 无分数线的堆叠 + 括号在绘制层；这里复用 frac 但无 rule
+            // 二项式：上下堆叠（无分数线）+ 圆括号。
+            // 旧实现把括号留给「绘制层」，但绘制层拿到的只是字形指令、不知道这里该包括号，
+            // 结果 \binom{n}{k} 渲染出来只有上下两个数。这里直接补上。
             let b = layout_stacked(font, n.as_ref(), k.as_ref(), style, false);
-            b
+            let (pa, pd) = font.ink_extents('(').unwrap_or((font.ascender, font.descender));
+            let (pa, pd) = (pa.max(1.0), pd.max(1.0));
+            let ds = ((b.height + b.depth) / (pa + pd) * 1.16)
+                .clamp(style.scale_of(font), style.scale_of(font) * 4.0);
+            let open = layout_char(font, '(', ds, 0.0);
+            let close = layout_char(font, ')', ds, 0.0);
+            let gap = font.units_per_em() * 0.04 * style.scale_of(font);
+            let mut out = Box::empty();
+            out.width = open.width + gap + b.width + gap + close.width;
+            out.height = b.height.max(open.height);
+            out.depth = b.depth.max(open.depth);
+            // 括号按内容墨迹的垂直中心对齐，不能简单挂在 y=0 基线上：
+            // 二项式上面是 n、下面是 k，内容中心并不在基线上。
+            let body_center = (b.height - b.depth) / 2.0;
+            let paren_center = (pa - pd) / 2.0;
+            let dy = body_center - paren_center * ds;
+            merge_at(&mut out, &open, 0.0, dy);
+            merge_at(&mut out, &b, open.width + gap, 0.0);
+            merge_at(&mut out, &close, open.width + gap + b.width + gap, dy);
+            out.height = out.height.max(dy + open.height);
+            out.depth = out.depth.max(-dy + open.depth);
+            out
         }
         Expr::Text(s) => {
             // 文本模式：按普通字符排，字号同正文
@@ -141,9 +164,16 @@ fn layout_accent(font: &MathFont, name: &str, body: &Expr, style: Style) -> Box 
     };
     let mut out = body_box.clone();
     if let Some(c) = acc {
-        let ab = layout_char(font, c, scale * 0.7, 0.0);
-        let dy = body_box.height + font.units_per_em() * 0.05 * scale;
-        merge_at(&mut out, &ab, (body_box.width - ab.width) / 2.0, dy);
+        let as_ = scale * 0.7;
+        let ab = layout_char(font, c, as_, 0.0);
+        // 按**墨迹**居中而不是按 advance 居中：`^` `¯` 这类字符左右侧留白很不对称，
+        // 用 advance 居中会让帽子整体偏向左边。
+        let (amin, amax) = font.ink_x_extent(c);
+        let ink_w = (amax - amin) * as_;
+        let dx = (body_box.width - ink_w) / 2.0 - amin * as_;
+        // 重音紧贴字顶，留一点缝即可；0.05em 会让帽子和字母之间空出一道。
+        let dy = body_box.height + font.units_per_em() * 0.015 * scale;
+        merge_at(&mut out, &ab, dx, dy);
         out.height = body_box.height.max(dy + ab.height * 0.6);
         out.width = body_box.width.max(ab.width);
     }
@@ -445,7 +475,8 @@ fn layout_stacked(
 
     // 分数线 y = -axis（在轴线下方一点；TeX：rule 中心在轴线上）
     let rule_y = -font.axis_height * scale;
-    let gap = ups * 0.12 * scale;
+    // 无分数线（binom）时上下要拉开更多，否则 n 和 k 几乎贴在一起
+    let gap = ups * (if has_rule { 0.12 } else { 0.26 }) * scale;
     let thickness = ups * 0.06 * scale;
 
     // 分子底到分数线的距离、分母顶到分数线的距离都 ≥ gap（y 向上为正，rule_y 在基线下方）：
@@ -493,7 +524,7 @@ fn layout_sqrt(font: &MathFont, degree: Option<&Expr>, body: &Expr, style: Style
     // √ 墨迹自然范围（scale 1）：顶 rad_asc（上）、底 -rad_desc（下），总高 rad_total。
     let (rad_asc, rad_desc) = font.ink_extents('√').unwrap_or((font.ascender, font.descender));
     let rad_total = (rad_asc + rad_desc).max(1.0);
-    let (rad_xmin, rad_xmax) = font.ink_x_extent('√');
+    let (_, rad_xmax) = font.ink_x_extent('√');
 
     // 横线中心 y：横线底 = body 墨迹顶 + cleargap
     let body_h = body_box.height;
@@ -527,9 +558,13 @@ fn layout_sqrt(font: &MathFont, degree: Option<&Expr>, body: &Expr, style: Style
         let db = layout_box(font, d, Style::Script);
         // 度数：抬高到 √ 顶墨迹上方（radicalDegreeBottomRaisePercent 为底抬升比例）
         let raise = constants.map(|c| c.radical_degree_bottom_raise_percent() as f32).unwrap_or(0.0);
-        let degree_bot = rad_y + rad_asc * rad_scale + rad_asc * rad_scale * (raise / 100.0);
+        // 度数要贴在**横线**上方，而不是贴 √ 墨迹顶上：
+        // √ 的墨迹顶比横线高得多（钩子会伸上去），按它算会让度数悬空一大截。
+        let _ = raise;
+        let degree_bot = rule_center + rule_t * 0.5 + vgap * 0.25;
         let deg_dy = degree_bot + db.depth;          // 度数基线
-        let deg_dx = (rad_xmin * rad_scale * 0.5 - db.width).min(-db.width * 0.3);
+        // 水平上右端对齐横线起点，让度数坐在钩子与横线交界的上方。
+        let deg_dx = (rule_x - db.width).max(0.0);
         merge_at(&mut out, &db, deg_dx, deg_dy);
         out.height = out.height.max(deg_dy + db.height);
     }
@@ -1095,5 +1130,80 @@ mod tests {
         assert_eq!(l.glyphs.len(), 3);
         assert_eq!(l.glyphs[0].ch, '(');
         assert_eq!(l.glyphs[2].ch, ')');
+    }
+}
+
+/// 回归测试：都是 2026-11-13 这轮迭代实际修掉的缺陷，留在这里防止再犯。
+#[cfg(test)]
+mod regression {
+    use super::*;
+    use crate::ast::parse;
+
+    const LM_PATH: &str = crate::LM_MATH_OTF;
+
+    fn font() -> MathFont<'static> {
+        let data = crate::font::load_latin_modern_math(LM_PATH).expect("字体存在");
+        let bytes: &'static [u8] = std::boxed::Box::leak(data.into_boxed_slice());
+        MathFont::from_bytes(bytes).expect("字体可解析")
+    }
+
+    #[test]
+    fn 二项式必须带括号() {
+        // 旧实现把括号留给「绘制层」，结果 \binom 只画了上下两个数
+        let f = font();
+        let l = layout(&f, &parse(r"\binom{n}{k}").unwrap());
+        let chars: Vec<char> = l.glyphs.iter().map(|g| g.ch).collect();
+        assert!(chars.contains(&'('), "缺少左括号: {chars:?}");
+        assert!(chars.contains(&')'), "缺少右括号: {chars:?}");
+    }
+
+    #[test]
+    fn 二项式括号包住内容() {
+        let f = font();
+        let l = layout(&f, &parse(r"\binom{2n}{n}").unwrap());
+        let inner_h = l
+            .glyphs
+            .iter()
+            .filter(|g| g.ch == 'n' || g.ch == '2')
+            .map(|g| g.y)
+            .fold(f32::MIN, f32::max);
+        assert!(l.height > inner_h, "括号顶应高于内容顶: {} <= {}", l.height, inner_h);
+    }
+
+    #[test]
+    fn 根指数不越出左边界() {
+        // 旧实现 deg_dx 恒为较大负数，3 会被推到公式左侧外面
+        let f = font();
+        let l = layout(&f, &parse(r"\sqrt[3]{x}").unwrap());
+        for g in &l.glyphs {
+            assert!(g.x >= -1.0, "字形 `{}` 跑到左边界外: x={}", g.ch, g.x);
+        }
+    }
+
+    #[test]
+    fn 根指数贴在横线上方() {
+        let f = font();
+        let l = layout(&f, &parse(r"\sqrt[3]{x}").unwrap());
+        let deg = l.glyphs.iter().find(|g| g.ch == '3').expect("应有根指数 3");
+        let rule = l.rules.first().expect("应有根号横线");
+        assert!(
+            deg.y >= rule.y,
+            "根指数应在横线上方: deg.y={} rule.y={}",
+            deg.y,
+            rule.y
+        );
+    }
+
+    #[test]
+    fn 重音落在字母正上方() {
+        let f = font();
+        for src in [r"\hat{a}", r"\bar{b}", r"\vec{v}"] {
+            let l = layout(&f, &parse(src).unwrap());
+            let body = l.glyphs.first().expect("应有底字");
+            let acc = l.glyphs.last().expect("应有重音");
+            // 重音的水平中心与底字中心相差不应超过半个底字宽
+            let diff = (acc.x - body.x).abs();
+            assert!(diff < f.advance(body.ch) * 0.5, "{src}: 重音偏移过大 {diff}");
+        }
     }
 }
