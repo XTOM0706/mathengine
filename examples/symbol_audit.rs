@@ -33,7 +33,7 @@ fn main() {
 
     println!("符号表共 {} 条", table.len());
     println!("字体缺字形 {} 条", missing_glyph.len());
-    for (n, got, want) in &missing_glyph {
+    for (n, got, _want) in &missing_glyph {
         println!("   \\{n:<18} 布局得到 U+{:04X} {:?}，字体无此字形", *got as u32, got);
 
     }
