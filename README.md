@@ -4,6 +4,10 @@
 
 输入是一段 LaTeX 公式，输出是**扁平的绘制指令**：每个字形的码位、位置、缩放，加上分数线与根号横线的矩形。渲染层不需要理解 TeX，照着画即可。
 
+<img src="docs/screenshots/quadratic.png" width="320" alt="二次方程求根公式">
+
+以上图形不是截图拼的，是 `examples/render_svg.rs` 直接读取本引擎输出的布局指令、再向字体索取字形轮廓画出来的。
+
 ## 为什么重新造一个
 
 移动端可用的 LaTeX 渲染方案主要有两类，各有硬伤。
@@ -51,6 +55,15 @@ Android 端需要 JNI 导出时才打开 feature：
 cargo build --release --features jni --target aarch64-linux-android
 ```
 
+## 跨端
+
+核心完全是平台无关的 Rust：只用 `std` + `ttf-parser`，没有任何 `cfg(target_os)` 分支，不碰文件系统以外的系统调用，输出是纯数据结构。
+
+- **能跨**：Linux、macOS、Windows、Android、iOS，以及任何能跑 Rust 的宿主。
+- **已验证**：本机 x86_64 Linux 实际构建与测试；CI 对 Linux / macOS / Windows 三平台跑同一套测试。
+- **未验证**：iOS、WASM、以及 Android 真机上的 aarch64 构建。
+- **不跨的部分**：`jni.rs` 是 Android 专用，由 feature 开关控制，默认不编译。C ABI（`ffi.rs`）是通用的，非 Android 宿主也应该走这条。
+
 ## 作为 C 库使用
 
 ```c
@@ -74,9 +87,14 @@ void arix_math_free(ArixMathLayout* layout);
 | 项 | 值 |
 |---|---|
 | Rust 源码行数 | 2574 |
-| 单元测试 | 58 个，全绿 |
+| 单元测试 | 58 个 |
+| 集成测试 | 7 个（只走公共 API） |
 | 运行时依赖 | 无（仅 `ttf-parser` 编译期依赖） |
 | 附带字体 | Latin Modern Math，约 720 KB |
+| 布局耗时（本机，15 条公式 30000 次采样） | 中位 3.04 µs，p95 8.23 µs |
+| 与 jlatexmath 1.0.7 对比 | 整体约快 1.5 倍，矩阵快 5 倍，求和略慢 |
+
+完整的测量方法、逐条对照与体积对比见 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)。体积一项本引擎不占优，文档里写明了原因与改进方向。
 
 ## 许可与致谢
 

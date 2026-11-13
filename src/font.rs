@@ -222,5 +222,12 @@ pub fn to_math_italic(ch: char) -> char {
     let c = ch as u32;
     if (0x61..=0x7A).contains(&c) { return char::from_u32(c + 0x1D44E - 0x61).unwrap_or(ch); }
     if (0x41..=0x5A).contains(&c) { return char::from_u32(c + 0x1D434 - 0x41).unwrap_or(ch); }
-    ch
+    // 数学模式下的运算符归一：ASCII 的 `-` 是连字符（又短又高），
+    // 真减号是 U+2212（更长、与 + 等宽对齐）。不换的话公式里减号会显得又短又偏上，
+    // 与 `\pm`、`+` 摆在一起时基线对不齐。`*` 同理换成 U+2217。
+    match ch {
+        '-' => '\u{2212}',
+        '*' => '\u{2217}',
+        _ => ch,
+    }
 }
