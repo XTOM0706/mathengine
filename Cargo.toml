@@ -1,0 +1,27 @@
+[package]
+name = "mathengine"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "轻量 LaTeX 数学排版引擎：解析 + TeX Box 布局，输出扁平绘制指令"
+keywords = ["latex", "math", "typesetting", "tex", "mobile"]
+categories = ["text-processing", "graphics"]
+
+[lib]
+name = "mathengine"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+# Android 端 JNI 导出。默认关闭，保证普通 PC 上 `cargo test` 不依赖 JDK/NDK。
+jni = ["dep:jni"]
+
+[dependencies]
+ttf-parser = { version = "0.21", features = ["opentype-layout"] }
+jni = { version = "0.21", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+panic = "unwind"
