@@ -169,3 +169,43 @@ token 池里故意混入了大量不合法组合：孤立的 `^` `_` `{` `}`、�
 代价要承认：**本引擎的真实命令覆盖远窄于 KaTeX 与 jlatexmath**，大致在 40 个命令的量级，而它们都是数百个。
 
 **下一步可做**：在 `Layout` 上增加一个 `unsupported: Vec<String>`，把被按字面渲染的命令报给宿主，让 UI 能提示「这条公式里有不支持的命令」。这样宽容策略就从「悄悄画错」变成「画得出但告诉你哪里不对」。
+
+## 实验七：真实文档实测
+
+拿一篇真实的、覆盖极广的 LaTeX 文章（关系符、箭头全家桶、大运算符、括号、重音、矩阵、逻辑、颜色、化学式、变态嵌套）当输入，抽出其中 59 条 `\[ … \]` 公式，逐条渲染。
+
+用例存在 `docs/cases-document.txt`（`---` 分隔），跑法：
+
+```bash
+cargo run --release --example batch -- docs/cases-document.txt
+```
+
+### 结果
+
+| 指标 | 第一遍 | 修完后 |
+|---|---|---|
+| 渲染成功 | 57 / 59 | **59 / 59** |
+| 有命令被丢弃 | 41 条 | 19 条 |
+| 有缺字 | 8 条 | 9 条 |
+| 中位耗时 | 176 µs | 231 µs |
+
+### 这轮修掉的问题
+
+1. **命令参数可以不带花括号**。TeX 允许 `\vec F`、`\frac12`，原实现一律要求 `{}`，真实文档里 `\vec F\cdot d\vec S` 这种写法直接解析失败。
+2. **组里的换行 `\\` 导致整条失败**。`\substack{a\\b}` 这类写法，换行本该由环境吞掉，我们却在组解析时撞上 Eol 报「expected }」。
+3. **组解析抄了三份**（`parse_atom`、`parse_required_group`、`parse_script_arg` 各一遍），修一处漏两处。已合并为 `parse_group_body`。
+4. **整条命令都不支持时返回空白图**。现在直接报错并列出涉及的命令，比让用户对着空白猜好。
+5. **补了 132 个符号命令**：箭头变体、集合关系变体、逻辑符号、框运算符、几何图形。字体子集相应补了 U+2300-23FF、U+25A0-25FF、U+27C0-27EF、U+2980-29FF 与 U+2A00-2AFF。
+
+### 仍然不支持的（19 条里涉及的）
+
+需要真正实现的布局命令，不是加个字符映射能解决的：
+
+- 堆叠与覆盖：`\overset`、`\underset`、`\stackrel`、`\substack`、`\sideset`、`\prescript`
+- 框与遮罩：`\boxed`、`\cancel`、`\bcancel`、`\xcancel`、`\cancelto`、`\phantom`、`\hphantom`、`\vphantom`、`\smash`
+- 字体族：`\mathbb`、`\mathbf`、`\mathcal`、`\mathfrak`、`\mathscr`、`\boldsymbol`、`\symbf`
+- 颜色与化学：`\textcolor`、`\colorbox`、`\fcolorbox`、`\ce`
+- 大运算符补充：`\bigodot`、`\bigsqcup`、`\bigstar`、`\biguplus`、`\iiiint`
+- 其他：`\xrightarrow` 系列、`\genfrac`、`\displaystyle`、`\leftroot`、`\uproot`、`\not`
+
+**优先补哪个**：字体族（`\mathbb` 等）性价比最高，只需要把字母映射到数学字母区，不涉及布局，而且 `\mathbb{R}` 这种写法在教材里到处都是。其次是 `\boxed` 与 `\cancel`，画一个矩形或斜线即可。

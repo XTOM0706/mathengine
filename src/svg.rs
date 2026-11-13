@@ -91,6 +91,17 @@ pub fn render(font: &MathFont, latex: &str, size: f32) -> Result<Rendered, Strin
     let unsupported = crate::ast::unknown_commands(&ast);
     let l = layout(font, &ast);
 
+    // 输入非空却什么都没画出来：极可能是整条公式的命令全都不被支持。
+    // 这时报错比返回一张空白图有用。
+    if l.glyphs.is_empty() && l.rules.is_empty() && !latex.trim().is_empty() {
+        let names = if unsupported.is_empty() {
+            String::from("（没有任何可渲染内容）")
+        } else {
+            format!("，涉及命令：{}", unsupported.join(" "))
+        };
+        return Err(format!("这条公式没有渲染出任何内容{names}"));
+    }
+
     let upem = font.units_per_em();
     let k = size / upem;
     let pad = size * 0.4;

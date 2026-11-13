@@ -1,0 +1,218 @@
+a\neq b,\quad a\not\equiv b,\quad a\not\approx b,\quad
+a\notin A,\quad A\nsubseteq B,\quad A\subsetneq B,\quad
+A\varsubsetneq B,\quad A\varsupsetneq B,
+---
+x\nleq y,\quad x\ngeq y,\quad x\nless y,\quad x\ngtr y,\quad
+x\nsim y,\quad x\ncong y,\quad l\nparallel m,\quad p\nmid q,
+---
+a\nprec b,\quad a\nsucc b,\quad \triangleq,\quad \eqsim,\quad
+\simeq,\quad \approxeq,\quad \asymp,\quad \cong,\quad
+\smile,\quad \frown,
+---
+\models,\quad \vDash,\quad \Vdash,\quad \VDash,\quad
+\nvdash,\quad \nVdash,\quad \perp,\quad \parallel,\quad
+\mid,\quad \nmid,\quad \shortmid,\quad \shortparallel,
+---
+\emptyset,\quad \varnothing,\quad \setminus,\quad \smallsetminus,\quad
+\complement,\quad \subset,\quad \Subset,\quad \supset,\quad \Supset,
+---
+\sqsubset,\quad \sqsupset,\quad \sqsubseteq,\quad \sqsupseteq,\quad
+\in,\quad \ni,\quad \notin,\quad \owns,\quad
+\subseteq,\quad \supseteq,\quad \nsubseteq,\quad \nsupseteq.
+---
+\leftarrow \rightarrow \leftrightarrow \Leftarrow \Rightarrow \Leftrightarrow
+---
+\longleftarrow \longrightarrow \longleftrightarrow
+\Longleftarrow \Longrightarrow \Longleftrightarrow
+---
+\uparrow \downarrow \updownarrow \Uparrow \Downarrow \Updownarrow
+---
+\nearrow \searrow \swarrow \nwarrow
+---
+\hookleftarrow \hookrightarrow \twoheadrightarrow \twoheadleftarrow
+---
+\leftharpoonup \leftharpoondown \rightharpoonup \rightharpoondown
+---
+\rightleftharpoons \leftrightharpoons \rightrightarrows \leftleftarrows
+---
+\rightleftarrows \leftrightarrows \upuparrows \downdownarrows
+---
+\upharpoonleft \upharpoonright \downharpoonleft \downharpoonright
+---
+\curvearrowleft \curvearrowright \circlearrowleft \circlearrowright
+---
+\looparrowleft \looparrowright \multimap \rightsquigarrow \leadsto
+---
+\dashrightarrow \dashleftarrow
+---
+\xrightarrow[below]{above},\quad
+\xleftarrow[below]{above},\quad
+\xLeftrightarrow[below]{above},\quad
+\xmapsto{f}.
+---
+\sum \prod \coprod \int \iint \iiint \iiiint \oint
+\oiint \oiiint \intop \smallint
+---
+\bigcup \bigcap \bigsqcup \bigvee \bigwedge
+\bigodot \bigoplus \bigotimes \biguplus \bigstar
+---
+\sum_{i=1}^{n} i,\quad
+\prod_{k=0}^{\infty} a_k,\quad
+\oint_{\partial\Omega} \vec F\cdot d\vec S,\quad
+\oiint_{\partial V} \vec E\cdot d\vec S.
+---
+\left( \frac{a}{b} \right),\quad
+\left[ \frac{a}{b} \right],\quad
+\left\{ \frac{a}{b} \right\},\quad
+\left\langle x \right\rangle,
+---
+\left\lceil x \right\rceil,\quad
+\left\lfloor x \right\rfloor,\quad
+\left. \frac{df}{dx} \right|_{x=0},\quad
+\left( \frac{a}{b} \middle| \frac{c}{d} \right),
+---
+\llbracket x \rrbracket,\quad
+\llparenthesis x \rrparenthesis,\quad
+\ulcorner x \urcorner,\quad
+\llcorner x \lrcorner.
+---
+\hat{x}\ \widehat{xyz}\ \check{x}\ \breve{x}\ \acute{x}\ \grave{x}
+---
+\tilde{x}\ \widetilde{xyz}\ \bar{x}\ \overline{xyz}\
+\underline{xyz}\ \vec{x}\ \dot{x}\ \ddot{x}\ \dddot{x}\ \ddddot{x}\
+\mathring{x}
+---
+\overbrace{a+b+\cdots+z}^{n},\quad
+\underbrace{a+b+\cdots+z}_{n},
+---
+\overleftarrow{AB},\quad \overrightarrow{AB},\quad
+\overleftrightarrow{AB},\quad
+\underleftarrow{AB},\quad \underrightarrow{AB},\quad
+\underleftrightarrow{AB},
+---
+x_i^j,\quad x_{i_j}^{j_i},\quad
+{}_{a}^{b}X,\quad \prescript{14}{6}{C},\quad
+\sideset{}{'}\sum_{n=1}^\infty,\quad
+\sum_{\substack{0<i<m\\0<j<n}} P(i,j).
+---
+\frac{a}{b}\quad \dfrac{a}{b}\quad \tfrac{a}{b}\quad
+\cfrac{1}{1+\cfrac{1}{1+x}}
+---
+\sqrt{x}\quad \sqrt[3]{x}\quad
+\sqrt[\leftroot{-2}\uproot{2}n]{x}
+---
+\binom{n}{k}\quad \dbinom{n}{k}\quad \tbinom{n}{k}\quad
+\genfrac{(}{)}{0pt}{}{a}{b}
+---
+\overset{\text{def}}{=}\quad
+\underset{x\to0}{\lim}\quad
+\stackrel{\text{def}}{=}
+---
+\begin{matrix} a&b\\c&d\end{matrix}\quad
+\begin{pmatrix} a&b\\c&d\end{pmatrix}\quad
+\begin{bmatrix} a&b\\c&d\end{bmatrix}\quad
+\begin{Bmatrix} a&b\\c&d\end{Bmatrix}
+---
+\begin{vmatrix} a&b\\c&d\end{vmatrix}\quad
+\begin{Vmatrix} a&b\\c&d\end{Vmatrix}\quad
+\begin{smallmatrix} a&b\\c&d\end{smallmatrix}
+---
+f(x)=
+\begin{cases}
+x^2, & x\ge 0,\\
+-x,  & x<0.
+\end{cases}
+---
+\begin{aligned}
+a &= b+c\\
+d &= e+f
+\end{aligned}
+---
+\forall x\in A,\quad \exists y\notin B,\quad \nexists z,\quad
+\neg P,\quad \lnot Q,\quad P\land Q,\quad P\lor Q,
+---
+P\wedge Q,\quad P\vee Q,\quad
+P\implies Q,\quad P\impliedby Q,\quad P\iff Q.
+---
+\mathcal{C},\quad \mathfrak{g},\quad \mathbb{R},\quad
+\mathscr{F},\quad \mathbf{A},\quad
+\boldsymbol{\alpha},\quad \symbf{v},\quad
+\operatorname{rank} A,\quad \operatorname{Hom}(A,B).
+---
+\pm \mp \times \div \cdot \ast \star \circ \bullet
+\diamond \lozenge \blacklozenge
+---
+\oplus \ominus \otimes \oslash \odot
+\circledast \circledcirc \circleddash
+---
+\boxplus \boxminus \boxtimes \boxdot
+\dotplus \divideontimes
+\ltimes \rtimes \leftthreetimes \rightthreetimes
+---
+\cup \cap \uplus \sqcup \sqcap \wedge \vee
+\barwedge \veebar \doublebarwedge \curlywedge \curlyvee
+---
+\Cup \Cap \intercal \amalg \wr \dagger \ddagger
+---
+\triangle \blacktriangle \blacktriangledown
+\blacktriangleleft \blacktriangleright
+\blacksquare \square \Box \Diamond
+---
+\alpha\ \beta\ \gamma\ \Gamma\ \Delta\ \nabla\ \infty\
+\neq\ \leq\ \geq\ \to\ \Rightarrow\ \in\ \notin\
+\subset\ \supseteq\ \cup\ \cap\
+\sum\ \prod\ \int\ \oint\
+\aleph\ \beth\ \gimel\ \daleth\
+\hbar\ \ell\ \wp\ \Re\ \Im\ \mho\ \eth
+---
+\textcolor{red}{x^2+y^2},\quad
+\colorbox{yellow}{$a+b$},\quad
+\fcolorbox{red}{yellow}{$c+d$}
+---
+\text{if } x>0 \text{ then } y=1,\quad
+\mbox{text in math},\quad
+\operatorname{sgn}(x).
+---
+\cancel{x}\quad \bcancel{x}\quad \xcancel{x}\quad
+\cancelto{0}{x}
+---
+\boxed{E=mc^2}\quad
+\phantom{xxx}\quad \hphantom{xxx}\quad \vphantom{\int}\quad
+\smash{\int_0^1} f(x)\,dx
+---
+\ce{H2O}\quad
+\ce{SO4^2-}\quad
+\ce{^{227}_{90}Th+}\quad
+\ce{CO2 + C -> 2CO}
+---
+a\,b\quad a\:b\quad a\;b\quad a\!b\quad
+a\quad b\quad a\qquad b
+---
+\bigl( x \bigr)\quad
+\Bigl( x \Bigr)\quad
+\biggl( x \biggr)\quad
+\Biggl( x \Biggr)
+---
+\left\{
+\left[
+\left(
+\frac{\sqrt[\leftroot{-2}\uproot{2}n]{x^2+1}}
+{\displaystyle\sum_{k=1}^{\infty}\frac{1}{k^2}}
+\right)^{2}
+\right]_{\substack{i=1\\j=2}}
+\right\}
+---
+\lim_{x\to0}\frac{\sin x}{x}=1,\quad
+\limsup_{n\to\infty} a_n,\quad
+\liminf_{n\to\infty} a_n,\quad
+\sup_{x\in A} f(x),\quad
+\inf_{x\in A} f(x)
+---
+\int_{-\infty}^{\infty} e^{-x^2}\,dx=\sqrt{\pi},\quad
+\iint_D f(x,y)\,dx\,dy,\quad
+\iiint_V \rho\,dV,\quad
+\oint_{\Gamma} P\,dx+Q\,dy
+---
+\Gamma(x)=\int_0^\infty t^{x-1}e^{-t}\,dt,\quad
+\zeta(s)=\sum_{n=1}^\infty \frac{1}{n^s},\quad
+\binom{n}{k}=\frac{n!}{k!(n-k)!}.

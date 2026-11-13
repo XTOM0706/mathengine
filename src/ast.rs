@@ -137,12 +137,7 @@ impl Parser {
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
         match self.peek().cloned() {
             None => Err(ParseError("unexpected end of input".into())),
-            Some(Token::BeginGroup) => {
-                self.next();
-                let inner = self.parse_row(true)?;
-                self.expect_end_group()?;
-                Ok(inner)   // 组 = 内联行（渲染期视为原子）
-            }
+            Some(Token::BeginGroup) => self.parse_group_body(),   // 组 = 内联行（渲染期视为原子）
             Some(Token::EndGroup) => Err(ParseError("unmatched }".into())),
             Some(Token::Sub) => Err(ParseError("stray _".into())),
             Some(Token::Sup) => Err(ParseError("stray ^".into())),
@@ -285,12 +280,7 @@ impl Parser {
     fn parse_script_arg(&mut self) -> Result<Expr, ParseError> {
         // 脚本参数是一个原子（字符/命令/组）
         match self.peek().cloned() {
-            Some(Token::BeginGroup) => {
-                self.next();
-                let inner = self.parse_row(true)?;
-                self.expect_end_group()?;
-                Ok(inner)
-            }
+            Some(Token::BeginGroup) => self.parse_group_body(),
             Some(Token::Char(ch)) => { self.next(); Ok(Expr::Atom { ch, cmd: None }) }
             Some(Token::ControlSeq(name)) => {
                 self.next();
@@ -353,12 +343,37 @@ impl Parser {
         }
     }
 
+    /// 解析一个 `{...}` 组的内容（开头的 `{` 已被消费前调用方 peek 到）。
+    ///
+    /// 组里可能有 `\\` 换行（`\\substack{a\\\\b}` 这类），换行本该由环境吞掉；
+    /// 这里宽容地当成顺序拼接，而不是让整条公式解析失败。
+    fn parse_group_body(&mut self) -> Result<Expr, ParseError> {
+        self.next(); // 吃掉 `{`
+        let mut parts = vec![self.parse_row(true)?];
+        while matches!(self.peek(), Some(Token::Eol)) {
+            self.pos += 1;
+            if matches!(self.peek(), Some(Token::EndGroup)) {
+                break;
+            }
+            parts.push(self.parse_row(true)?);
+        }
+        self.expect_end_group()?;
+        Ok(if parts.len() == 1 {
+            parts.pop().unwrap()
+        } else {
+            Expr::Row(parts)
+        })
+    }
+
     fn parse_required_group(&mut self, what: &str) -> Result<Expr, ParseError> {
-        match self.next() {
-            Some(Token::BeginGroup) => {
-                let inner = self.parse_row(true)?;
-                self.expect_end_group()?;
-                Ok(inner)
+        match self.peek().cloned() {
+            Some(Token::BeginGroup) => self.parse_group_body(),
+            // TeX 允许命令参数不带花括号：`\vec F`、`\frac12` 都是合法的，
+            // 取紧随其后的单个字符当参数。之前的实现一律报错，真实文档里
+            // `\vec F\cdot d\vec S` 这种写法很常见。
+            Some(Token::Char(c)) => {
+                self.next();
+                Ok(Expr::Atom { ch: c, cmd: None })
             }
             _ => Err(ParseError(format!("expected {{}} group for {what}"))),
         }
@@ -508,6 +523,9 @@ fn looks_like_greek_or_symbol(name: &str) -> bool {
         "overleftarrow","overrightarrow",
         "big","Big","bigg","Bigg","bigl","bigr","Bigl","Bigr","biggl","biggr","Biggl","Biggr",
         "left","right","middle","mathopen","mathclose","mathrel","mathbin","mathord","mathop",
+        // 2026-11-13 按真实文档补齐的符号命令
+        "uplus","sqcup","sqcap","smallint","oiint","oiiint","intop","ulcorner","urcorner","llcorner","lrcorner","llbracket","rrbracket","llparenthesis","rrparenthesis",
+        "nearrow","searrow","swarrow","nwarrow","leftharpoonup","leftharpoondown","rightharpoonup","rightharpoondown","rightleftharpoons","leftrightharpoons","rightrightarrows","leftleftarrows","rightleftarrows","leftrightarrows","upuparrows","downdownarrows","upharpoonleft","upharpoonright","downharpoonleft","downharpoonright","curvearrowleft","curvearrowright","circlearrowleft","circlearrowright","looparrowleft","looparrowright","multimap","rightsquigarrow","leadsto","dashrightarrow","dashleftarrow","twoheadrightarrow","twoheadleftarrow","Longleftarrow","Longrightarrow","Longleftrightarrow","Uparrow","Downarrow","Updownarrow","nsubseteq","nsupseteq","subsetneq","supsetneq","varsubsetneq","varsupsetneq","sqsubset","sqsupset","sqsubseteq","sqsupseteq","Subset","Supset","owns","complement","smallsetminus","nleq","ngeq","nless","ngtr","nsim","ncong","nparallel","nmid","nprec","nsucc","triangleq","eqsim","approxeq","asymp","smile","frown","models","vDash","Vdash","VDash","nvdash","nVdash","perp","parallel","mid","shortmid","shortparallel","nexists","lnot","wedge","vee","impliedby","iff","blacklozenge","diamond","lozenge","boxplus","boxminus","boxtimes","boxdot","dotplus","divideontimes","ltimes","rtimes","leftthreetimes","rightthreetimes","barwedge","veebar","doublebarwedge","curlywedge","curlyvee","Cup","Cap","intercal","triangle","blacktriangle","blacktriangledown","blacktriangleleft","blacktriangleright","blacksquare","square","Box","Diamond",
     ];
     GREEK.contains(&name) || SYMS.contains(&name)
 }
