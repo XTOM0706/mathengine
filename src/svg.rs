@@ -17,6 +17,8 @@ pub struct Rendered {
     pub glyphs: usize,
     /// 字体里没有字形、被跳过的字符数
     pub missing: usize,
+    /// AST 里未识别的命令（被当成空盒丢弃，用户需要知道）
+    pub unsupported: Vec<String>,
 }
 
 struct PathBuilder {
@@ -76,7 +78,17 @@ fn glyph_path(face: &Face, gid: u16, scale: f32) -> Option<String> {
 
 /// 渲染一条公式。`size` 是字号（px），失败返回解析错误的可读描述。
 pub fn render(font: &MathFont, latex: &str, size: f32) -> Result<Rendered, String> {
+    // 最常见的误用：把整篇文档粘进来。直接说清楚，别画出一堆散字让用户猜。
+    if latex.contains("\\documentclass") || latex.contains("\\begin{document}") {
+        return Err(
+            "这看起来是一整篇 LaTeX 文档。本引擎只渲染数学模式片段：请只贴公式本身，\
+             不要带导言区、宏包与 \\begin{document}。"
+                .to_string(),
+        );
+    }
+
     let ast = parse(latex).map_err(|e| format!("{e:?}"))?;
+    let unsupported = crate::ast::unknown_commands(&ast);
     let l = layout(font, &ast);
 
     let upem = font.units_per_em();
@@ -134,5 +146,6 @@ pub fn render(font: &MathFont, latex: &str, size: f32) -> Result<Rendered, Strin
         height: h,
         glyphs: l.glyphs.len(),
         missing,
+        unsupported,
     })
 }

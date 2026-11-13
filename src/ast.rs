@@ -57,6 +57,56 @@ pub enum Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError(pub String);
 
+/// 收集 AST 里所有未识别的命令名（去重、保持首次出现顺序）。
+///
+/// 宽容解析会把不认识的命令留成 [`Expr::Unknown`]，布局时变成空盒——
+/// 于是「`\textcolor{red}{x}`」会静默显示成 `redx`。调用方拿到这份清单就能提示用户
+/// 哪些命令其实没被支持，而不是让他对着画错的公式猜。
+pub fn unknown_commands(e: &Expr) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_unknown(e, &mut out);
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn walk_unknown(e: &Expr, out: &mut Vec<String>) {
+    match e {
+        Expr::Unknown(name) => out.push(name.clone()),
+        Expr::Row(v) => v.iter().for_each(|e| walk_unknown(e, out)),
+        Expr::Scripts { base, sub, sup } => {
+            walk_unknown(base, out);
+            if let Some(s) = sub { walk_unknown(s, out); }
+            if let Some(s) = sup { walk_unknown(s, out); }
+        }
+        Expr::Frac { num, den } => {
+            walk_unknown(num, out);
+            walk_unknown(den, out);
+        }
+        Expr::Sqrt { degree, body } => {
+            if let Some(d) = degree { walk_unknown(d, out); }
+            walk_unknown(body, out);
+        }
+        Expr::Binom { n, k } => {
+            walk_unknown(n, out);
+            walk_unknown(k, out);
+        }
+        Expr::Bigop { sub, sup, .. } => {
+            if let Some(s) = sub { walk_unknown(s, out); }
+            if let Some(s) = sup { walk_unknown(s, out); }
+        }
+        Expr::LeftRight { body, .. } => walk_unknown(body, out),
+        Expr::Matrix { rows, .. } => {
+            for row in rows {
+                for cell in row { walk_unknown(cell, out); }
+            }
+        }
+        Expr::Accent { body, .. } | Expr::Line { body, .. } => walk_unknown(body, out),
+        // 叶子节点，不会有 Unknown
+        Expr::Atom { .. } | Expr::Symbol(_) | Expr::Text(_) => {}
+    }
+}
+
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
     let toks = tokenize(src);
     let mut p = Parser { toks, pos: 0 };

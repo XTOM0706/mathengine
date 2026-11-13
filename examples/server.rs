@@ -83,6 +83,10 @@ async function render() {
       + r.headers.get('X-Micros') + ' µs  '
       + '往返 ' + ms.toFixed(0) + ' ms'
       + (r.headers.get('X-Missing') !== '0' ? '  缺字 ' + r.headers.get('X-Missing') : '');
+    const uns = r.headers.get('X-Unsupported-List');
+    if (uns) {
+      err.textContent = '这些命令没被支持，已被丢弃：' + uns.split(',').map(c => '\\' + c).join(' ');
+    }
   } catch (e) {
     err.textContent = String(e);
   }
@@ -179,8 +183,8 @@ fn handle(mut stream: TcpStream, font: &MathFont) {
                 "200 OK",
                 r.svg.as_bytes(),
                 &format!(
-                    "Content-Type: image/svg+xml; charset=utf-8\r\nX-Glyphs: {}\r\nX-Missing: {}\r\nX-Micros: {}\r\nX-Size: {:.0}x{:.0}\r\n",
-                    r.glyphs, r.missing, us, r.width, r.height
+                    "Content-Type: image/svg+xml; charset=utf-8\r\nX-Glyphs: {}\r\nX-Missing: {}\r\nX-Unsupported: {}\r\nX-Unsupported-List: {}\r\nX-Micros: {}\r\nX-Size: {:.0}x{:.0}\r\n",
+                    r.glyphs, r.missing, r.unsupported.len(), r.unsupported.join(","), us, r.width, r.height
                 ),
             );
         }
