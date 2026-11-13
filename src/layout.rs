@@ -246,10 +246,9 @@ fn layout_box(font: &MathFont, expr: &Expr, style: Style) -> Box {
             layout_text_run_upright(font, &s.chars().collect::<Vec<_>>(), scale)
         }
         Expr::Func(name) => {
-            // 函数名：正体，后面跟一个 thin space（TeX 的 \mathop 间距）
-            let mut b = layout_text_run_upright(font, &name.chars().collect::<Vec<_>>(), scale);
-            b.width += font.units_per_em() / 6.0 * scale;
-            b
+            // 函数名：正体。它与后面参数之间的间距交给排版表（MClass::Op），
+            // 不能直接加在这里——否则 `\sin^2` 的上标会被推得离 sin 老远。
+            layout_text_run_upright(font, &name.chars().collect::<Vec<_>>(), scale)
         }
         Expr::Bigop { name, sub, sup } => layout_bigop(font, name, sub.as_deref(), sup.as_deref(), style),
         Expr::LeftRight { open, body, close } => layout_left_right(font, open, body.as_ref(), close, style),
@@ -681,6 +680,7 @@ fn math_class(e: &Expr) -> MClass {
             ',' | ';' | '!' => Punct,
             _ => Ord,
         },
+        Expr::Func(_) => Op,
         Expr::Symbol(s) => match s.as_str() {
             "leq" | "geq" | "neq" | "approx" | "equiv" | "sim" | "propto" | "subset" | "supset"
             | "subseteq" | "supseteq" | "in" | "ni" | "to" | "rightarrow" | "leftarrow"
@@ -704,7 +704,7 @@ fn math_spacing(prev: MClass, cur: MClass) -> f32 {
         (Ord, Rel) | (Rel, Ord) | (Op, Rel) | (Rel, Op) | (Bin, Rel) | (Rel, Bin)
         | (Rel, Rel) | (Open, Rel) | (Rel, Open) | (Rel, Close) | (Rel, Punct) => mu(5.0), // thickspace
         (Close, Bin) | (Close, Op) | (Punct, Bin) | (Punct, Op) | (Inner, Bin) | (Inner, Op)
-        | (Open, Bin) | (Open, Op) => mu(4.0),
+        | (Open, Bin) | (Open, Op) | (Bin, Op) => mu(4.0),
         (Close, Rel) | (Punct, Rel) | (Inner, Rel) => mu(5.0),
         (Bin, Close) => mu(0.0),
         _ => 0.0,
