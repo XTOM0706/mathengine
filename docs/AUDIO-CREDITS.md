@@ -8,7 +8,11 @@
 
 ## 旁白
 
-piper（本地神经语音合成）中文模型 `zh_CN-huayan-medium`，由 `tools/make_voiceover.sh` 生成，台词见 `tools/voiceover.txt`。每段合成后做响度归一化（-16 LUFS）——piper 的输出电平不稳定，实测有段落峰值只有 -40 dB，不归一化会出现「只剩背景音乐」。
+edge-tts 的 `zh-CN-YunxiNeural`（男声），由 `tools/make_voiceover_edge.sh` 生成，台词见 `tools/voiceover.txt`。
+
+- 为什么不用 piper：piper 的中文只有女声（huayan），要男声只能走 edge-tts。代价是必须联网，且接口非官方。
+- 每段合成后做响度归一化（-16 LUFS）。piper 的输出电平不稳定，实测有段落峰值只有 -40 dB，不归一化会出现「只剩背景音乐」。
+- **朗读文本同时以字幕烧进画面**（ASS + Noto Sans CJK SC），字幕在底部，页脚之上，不与页脚叠字。
 
 ## 背景音乐
 
