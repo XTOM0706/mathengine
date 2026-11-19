@@ -24,17 +24,19 @@ ls "$svgd"/f*.svg | xargs -P "$(nproc)" -I{} sh -c \
   'b=$(basename {} .svg); /usr/sbin/rsvg-convert -w 1920 -h 1080 "{}" -o "'"$pngd"'/$b.png"'
 
 n=$(ls "$pngd"/f*.png | wc -l)
-FRAMES=2175
+# 与 examples/video_frames.rs 的 TOTAL 保持一致（188 s × 30 fps）
+FRAMES=5640
 if [ "$n" -ne "$FRAMES" ]; then
   echo "帧数不对：$n / $FRAMES（目录里可能有旧帧）" >&2
   exit 1
 fi
 
 echo "== 3/3 编码（libx264 / yuv420p / 30fps）"
+# 3 分钟长的 1080p 要压在 30 MB 以内，码率上限约 1.2 Mbps；实测 CRF 18 约 8 MB，留给小字更多余量
 /usr/sbin/ffmpeg -hide_banner -loglevel warning -y \
   -framerate 30 -i "$pngd/f%05d.png" \
   -c:v libx264 -profile:v high -level 4.1 -pix_fmt yuv420p \
-  -tune animation -crf 16 -preset slow -r 30 -movflags +faststart \
+  -tune animation -crf "${CRF:-18}" -preset slow -r 30 -movflags +faststart \
   "$out"
 
 /usr/sbin/ffprobe -v error -show_entries format=duration,size \
