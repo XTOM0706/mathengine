@@ -634,7 +634,7 @@ fn scene_arch(ctx: &Ctx, t: f32) -> String {
     b
 }
 
-// ---------------------------------------------------------------- 场景四：实时渲染
+// ---------------------------------------------------------------- 场景四：逐帧渲染
 
 const DEMOS: [(&str, &str); 6] = [
     (
@@ -666,7 +666,7 @@ const DEMOS: [(&str, &str); 6] = [
 fn scene_demo(ctx: &Ctx, arts: &[Art], t: f32, local_frame: isize) -> String {
     let mut b = String::new();
     let out = 1.0; // 场景边界的淡出由 frame() 统一做交叉淡化
-    scene_head(ctx, &mut b, "实时渲染", "引擎现算，不是截图", t, out);
+    scene_head(ctx, &mut b, "逐帧渲染", "引擎逐帧生成，不是截图", t, out);
 
     let tag = Spec {
         s: "mathengine::svg::render(&font, latex, size)",
@@ -928,7 +928,7 @@ const SCENES: [(usize, &str); 6] = [
     (0, "封面"),
     (F_PROBLEM, "问题"),
     (F_ARCH, "架构"),
-    (F_DEMO, "实时渲染"),
+    (F_DEMO, "逐帧渲染"),
     (F_DATA, "数据"),
     (F_END, "开源"),
 ];

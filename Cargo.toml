@@ -2,7 +2,7 @@
 name = "mathengine"
 version = "0.1.0"
 edition = "2021"
-license = "AGPL-3.0-or-later"
+license = "Apache-2.0"
 description = "轻量 LaTeX 数学排版引擎：解析 + TeX Box 布局，输出扁平绘制指令"
 keywords = ["latex", "math", "typesetting", "tex", "mobile"]
 categories = ["text-processing", "graphics"]

@@ -112,6 +112,6 @@ void arix_math_free(ArixMathLayout* layout);
 
 ## 许可与致谢
 
-代码以 **AGPL-3.0-or-later** 发布，见 `LICENSE`。本项目从 Arix（OnyxAI）主仓库的 `mathengine/` 模块拆出独立维护。
+代码以 **Apache-2.0** 发布，见 `LICENSE`。本项目从 Arix（OnyxAI）主仓库的 `mathengine/` 模块拆出，由原作者重新以 Apache-2.0 授权独立维护；主仓库其余部分仍为 AGPL-3.0。
 
 字体为 Latin Modern Math，来自 GUST 字体项目，按其自身许可分发，见 `assets/NOTICE`。
