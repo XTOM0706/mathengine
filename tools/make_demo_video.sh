@@ -13,6 +13,8 @@ work=${WORK:-/tmp/mathengine-demo}
 svgd="$work/svg"
 pngd="$work/png"
 mkdir -p "$svgd" "$pngd"
+# 清掉上一轮留下的帧：帧数校验只应数这一轮生成的文件
+find "$svgd" "$pngd" -maxdepth 1 -type f \( -name 'f*.svg' -o -name 'f*.png' \) -delete
 
 echo "== 1/3 生成帧（SVG）"
 cargo run --release --manifest-path "$repo/Cargo.toml" --example video_frames -- "$svgd"
@@ -22,8 +24,9 @@ ls "$svgd"/f*.svg | xargs -P "$(nproc)" -I{} sh -c \
   'b=$(basename {} .svg); /usr/sbin/rsvg-convert -w 1920 -h 1080 "{}" -o "'"$pngd"'/$b.png"'
 
 n=$(ls "$pngd"/f*.png | wc -l)
-if [ "$n" -ne 1380 ]; then
-  echo "帧数不对：$n / 1380（目录里可能有旧帧）" >&2
+FRAMES=2175
+if [ "$n" -ne "$FRAMES" ]; then
+  echo "帧数不对：$n / $FRAMES（目录里可能有旧帧）" >&2
   exit 1
 fi
 

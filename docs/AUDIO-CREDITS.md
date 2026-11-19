@@ -2,6 +2,10 @@
 
 演示视频 `docs/demo.mp4` 的音轨由旁白与背景音乐合成。
 
+> 现状：当前 `docs/demo.mp4` 是 72.5 秒的**无声版**（画面重做后先出无声母版）。
+> 下面的音频素材与署名适用于后续混音；`tools/voiceover.txt` 的时间点仍按旧的
+> 46 秒版编排，混音前需要按新场景表重排。
+
 ## 旁白
 
 piper（本地神经语音合成）中文模型 `zh_CN-huayan-medium`，由 `tools/make_voiceover.sh` 生成，台词见 `tools/voiceover.txt`。每段合成后做响度归一化（-16 LUFS）——piper 的输出电平不稳定，实测有段落峰值只有 -40 dB，不归一化会出现「只剩背景音乐」。
