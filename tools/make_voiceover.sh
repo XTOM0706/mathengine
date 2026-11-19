@@ -34,8 +34,11 @@ while IFS='|' read -r start text; do
     i=$((i+1))
     wav="$WORK/v$i.wav"
     printf '%s' "$text" | "$PIPER" -m "$MODEL" -c "$CFG" -f "$wav" --sentence-silence 0.15 2>/dev/null
-    # 统一重采样到 44.1k 单声道，与配乐同格式
-    ffmpeg -v error -i "$wav" -ar 44100 -ac 1 -c:a pcm_s16le -y "$WORK/n$i.wav"
+    # 统一重采样到 44.1k 单声道，并做响度归一化。
+    # piper 的输出电平不稳定（实测有过峰值只有 -40 dB 的情况），不归一化会出现
+    # 「旁白几乎听不见、只剩背景音乐」——这不算合成失败，但成片里就是没法听。
+    ffmpeg -v error -i "$wav" -af "loudnorm=I=-16:TP=-1.5:LRA=11" \
+      -ar 44100 -ac 1 -c:a pcm_s16le -y "$WORK/n$i.wav"
     d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$WORK/n$i.wav")
     echo "  [$start s] ${d}s  $text"
     inputs+=(-i "$WORK/n$i.wav")
