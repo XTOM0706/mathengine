@@ -1,75 +1,78 @@
 //! `cargo run --release --example video_frames -- 输出目录`：生成演示视频的逐帧 SVG。
 //!
-//! 每一帧都是一张 1920×1080 的完整 SVG：公式部分不是截图，而是调用
-//! `mathengine::layout` 算布局、再向字体索取字形轮廓画出来的路径——和
-//! `examples/render_svg.rs` 走的是同一份数据。中文与说明文字用 SVG `<text>`
-//! 交给 rsvg / Pango 排版，避免 ffmpeg drawtext 的字体路径问题。
+//! 每一帧都是一张 1920×1080 的完整 SVG。公式部分不是截图：调用 `mathengine::layout`
+//! 算出布局，再向字体索取字形轮廓画成 path。中文与说明文字用 SVG `<text>` 交给
+//! rsvg / Pango 排版。
 //!
-//! 观众是科创赛评委：全片用效果图和耗时说事，不出现实现内部的术语。
-//! 离线逐帧预渲染，换场一律硬切，一帧只画一条公式、最多一套字幕。
+//! 六段结构（旁白后配，画面只留底部 y 900–1000 的字幕安全区）：
+//!   一 网页方案的问题 → 二 原理 → 三 核心优势 → 四 局限 → 五 应用 → 六 结尾
 //!
-//! 宽度测量直接读字体 `hmtx`：中文用 Noto Sans CJK SC，拉丁用 JetBrains Maple
-//! Mono，这样居中与分段文字的落点不靠猜。
+//! 全片逐帧离线生成，不做即时渲染；一帧最多一条公式、零套字幕。
 
 use mathengine::ast::parse;
 use mathengine::font::{load_latin_modern_math, MathFont};
 use mathengine::layout::layout;
-use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::time::Instant;
 use ttf_parser::{Face, GlyphId, OutlineBuilder};
 
 const FW: f32 = 1920.0;
 const FH: f32 = 1080.0;
 const FPS: f32 = 30.0;
 
-// 配色：深底 + 青绿强调，公式用近白。全片只用这几档，不加杂色。
+// 配色：深底 + 青绿强调 + 琥珀色警示。全片只用这几档。
 const C_TXT: &str = "#eef2f9";
-const C_DIM: &str = "#94a2b8";
+const C_DIM: &str = "#9aa8bd";
 const C_FAINT: &str = "#5f6d83";
-/// 脚注：比 C_FAINT 亮一档，投影与压缩后仍读得出。
-const C_FOOT: &str = "#7b8aa3";
-/// 卡片内小字：比 C_FAINT 亮一档，投影也看得清。
-const C_SUB: &str = "#7d8ba2";
+const C_SUB: &str = "#8290a7";
 const C_LINE: &str = "#1d2939";
-const C_PANEL: &str = "#0f1622";
+const C_PANEL2: &str = "#0b111b";
 const C_ACC: &str = "#2ee6c5";
 const C_AMBER: &str = "#f7b955";
+const C_RED: &str = "#ff6b6b";
+const C_BLUE: &str = "#6aa9ff";
 
 const SANS: &str = "Noto Sans CJK SC";
 const MONO: &str = "JetBrains Maple Mono";
 
-// 场景切分（帧，30 fps）。S_ 为场景起始，TOTAL 为总帧数。
-const S_COVER: usize = 0; // 4.0 s
-const S_SHOW: usize = 120; // 56.0 s：四条公式，各 14 s
-const S_MATRIX: usize = 1800; // 46.0 s：2×2 / 5×5 / 20×20
-const S_PERF: usize = 3180; // 40.0 s：表格 19 s + 柱状图 21 s
-const S_ARCH: usize = 4380; // 34.0 s：三步流程
-const S_END: usize = 5400; // 8.0 s
-const TOTAL: usize = 5640; // 188.0 s
+// 时间轴（帧，30 fps）。
+const S_WEB: usize = 0; //    0 –  24 s  网页方案的麻烦
+const S_HOW: usize = 720; //  24 –  76 s  原理四步
+const S_WIN: usize = 2280; // 76 – 128 s  三块优势
+const S_LIM: usize = 3840; // 128 – 158 s  局限
+const S_USE: usize = 4740; // 158 – 172 s  应用
+const S_END: usize = 5160; // 172 – 180 s  结尾
+const TOTAL: usize = 5400; // 180.0 s
 
-const SHOW_SLOT: usize = 420; // 每条公式 14 s
-const MAT_SLOT: [usize; 3] = [360, 420, 600]; // 12 s / 14 s / 20 s
-const TBL_LEN: usize = 570; // 19 s
-const CHART_LEN: usize = 630; // 21 s
-// 场景长度必须首尾接上，改一个数字忘了另一个会在编译时报错
-const _: () = assert!(S_MATRIX - S_SHOW == 4 * SHOW_SLOT);
-const _: () = assert!(S_PERF - S_MATRIX == MAT_SLOT[0] + MAT_SLOT[1] + MAT_SLOT[2]);
-const _: () = assert!(S_ARCH - S_PERF == TBL_LEN + CHART_LEN);
-const _: () = assert!(TOTAL == S_END + 240);
+const HOW_SLOT: usize = 390; // 4 × 13 s
+const WIN_A: usize = 540; // 体积 18 s
+const WIN_B: usize = 540; // 用例 18 s
+const WIN_C: usize = 480; // 手机 16 s
+const LIM_A: usize = 540; // 矩阵 18 s
+const LIM_B: usize = 360; // 不支持 12 s
+
+const _: () = assert!(S_HOW - S_WEB == 720);
+const _: () = assert!(S_WIN - S_HOW == 4 * HOW_SLOT);
+const _: () = assert!(S_LIM - S_WIN == WIN_A + WIN_B + WIN_C);
+const _: () = assert!(S_USE - S_LIM == LIM_A + LIM_B);
+const _: () = assert!(S_END - S_USE == 420);
+const _: () = assert!(TOTAL - S_END == 240);
 
 const SCENES: [(usize, &str); 6] = [
-    (S_COVER, "封面"),
-    (S_SHOW, "公式演示"),
-    (S_MATRIX, "复杂矩阵"),
-    (S_PERF, "性能对比"),
-    (S_ARCH, "怎么做的"),
-    (S_END, "仓库"),
+    (S_WEB, "网页方案"),
+    (S_HOW, "排版原理"),
+    (S_WIN, "核心优势"),
+    (S_LIM, "当前局限"),
+    (S_USE, "应用价值"),
+    (S_END, "结尾"),
 ];
 
-/// 全片禁用的词：观众是评委，不该看到实现内部的行话。
-const BANNED: [&str; 8] = ["实时", "token", "AST", "glyph", "Box", "指令", "语法树", "词元"];
+/// 禁用词：不出现「实时」，也不暗示即时渲染。
+const BANNED: [&str; 6] = ["实时", "即时", "秒开", "秒出", "瞬间完成", "零等待"];
+
+// 字幕安全区：底部 y 900–1000 留给后期烧字幕，画面不得占用。
+const SAFE_TOP: f32 = 900.0;
+const SAFE_BOT: f32 = 1000.0;
 
 // ---------------------------------------------------------------- 字体与测量
 
@@ -128,21 +131,45 @@ impl Metrics {
 
 // ---------------------------------------------------------------- 公式美术
 
+/// 收集字形轮廓，同时记住轮廓包围盒（用来把符号摆进方块正中）。
 struct PathBuilder {
     d: String,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+}
+
+impl PathBuilder {
+    fn new() -> PathBuilder {
+        PathBuilder { d: String::new(), x0: f32::MAX, y0: f32::MAX, x1: f32::MIN, y1: f32::MIN }
+    }
+    fn pt(&mut self, x: f32, y: f32) {
+        self.x0 = self.x0.min(x);
+        self.x1 = self.x1.max(x);
+        self.y0 = self.y0.min(y);
+        self.y1 = self.y1.max(y);
+    }
 }
 
 impl OutlineBuilder for PathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
+        self.pt(x, y);
         let _ = write!(self.d, "M{x:.1} {:.1} ", -y);
     }
     fn line_to(&mut self, x: f32, y: f32) {
+        self.pt(x, y);
         let _ = write!(self.d, "L{x:.1} {:.1} ", -y);
     }
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        self.pt(x1, y1);
+        self.pt(x, y);
         let _ = write!(self.d, "Q{x1:.1} {:.1} {x:.1} {:.1} ", -y1, -y);
     }
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        self.pt(x1, y1);
+        self.pt(x2, y2);
+        self.pt(x, y);
         let _ = write!(self.d, "C{x1:.1} {:.1} {x2:.1} {:.1} {x:.1} {:.1} ", -y1, -y2, -y);
     }
     fn close(&mut self) {
@@ -153,9 +180,12 @@ impl OutlineBuilder for PathBuilder {
 /// 一个已放置字形的绘制数据：轮廓 path 用字体单位，落点用布局坐标（y 向上）。
 struct GlyphArt {
     d: String,
+    ch: char,
     x: f32,
     y: f32,
     scale: f32,
+    /// 轮廓包围盒：(xmin, ymin, xmax, ymax)，字体单位、y 向上。
+    bb: (f32, f32, f32, f32),
 }
 
 struct RuleArt {
@@ -172,9 +202,10 @@ struct Art {
     width: f32,
     height: f32,
     depth: f32,
+    latex: String,
 }
 
-fn build_art(font: &MathFont, cache: &mut HashMap<u16, String>, latex: &str) -> Result<Art, String> {
+fn build_art(font: &MathFont, latex: &str) -> Result<Art, String> {
     let ast = parse(latex).map_err(|e| format!("{e:?}"))?;
     let l = layout(font, &ast);
     let face = font.face_ref().ok_or_else(|| "字体没有 face".to_string())?;
@@ -184,22 +215,13 @@ fn build_art(font: &MathFont, cache: &mut HashMap<u16, String>, latex: &str) -> 
 
     let mut glyphs = Vec::with_capacity(l.glyphs.len());
     for g in &l.glyphs {
-        let gid = face
-            .glyph_index(g.ch)
-            .ok_or_else(|| format!("字体缺字 {:?}", g.ch))?;
-        if !cache.contains_key(&gid.0) {
-            let mut pb = PathBuilder { d: String::new() };
-            if face.outline_glyph(GlyphId(gid.0), &mut pb).is_none() || pb.d.is_empty() {
-                return Err(format!("字形无轮廓 {:?}", g.ch));
-            }
-            cache.insert(gid.0, pb.d);
+        let gid = face.glyph_index(g.ch).ok_or_else(|| format!("字体缺字 {:?}", g.ch))?;
+        let mut pb = PathBuilder::new();
+        if face.outline_glyph(GlyphId(gid.0), &mut pb).is_none() || pb.d.is_empty() {
+            return Err(format!("字形无轮廓 {:?}", g.ch));
         }
-        glyphs.push(GlyphArt {
-            d: cache[&gid.0].clone(),
-            x: g.x,
-            y: g.y,
-            scale: g.scale,
-        });
+        let bb = (pb.x0, pb.y0, pb.x1, pb.y1);
+        glyphs.push(GlyphArt { d: pb.d, ch: g.ch, x: g.x, y: g.y, scale: g.scale, bb });
     }
     let rules = l
         .rules
@@ -207,16 +229,7 @@ fn build_art(font: &MathFont, cache: &mut HashMap<u16, String>, latex: &str) -> 
         .map(|r| RuleArt { x: r.x, y: r.y, w: r.width, th: r.thickness.max(1.0) })
         .collect();
 
-    Ok(Art { glyphs, rules, width: l.width, height: l.height, depth: l.depth })
-}
-
-/// 一条公式在画面上的数据：名字、一句话说明、原始输入、算好的图形、实测耗时。
-struct Shot {
-    name: &'static str,
-    note: &'static str,
-    latex: String,
-    art: Art,
-    micros: f64,
+    Ok(Art { glyphs, rules, width: l.width, height: l.height, depth: l.depth, latex: latex.to_string() })
 }
 
 // ---------------------------------------------------------------- 上下文
@@ -228,6 +241,7 @@ struct Ctx {
     mono: Metrics,
     mono_bold: Metrics,
     warn: std::cell::RefCell<Vec<String>>,
+    bad: std::cell::RefCell<Vec<String>>,
 }
 
 struct Spec<'a> {
@@ -269,18 +283,28 @@ impl Ctx {
         }
     }
 
-    /// 文字宽度（含字距）。
     fn tw(&self, sp: &Spec) -> f32 {
-        let mut w = self
-            .metrics(sp.mono, sp.bold)
-            .advance(sp.s, sp.size, &mut self.warn.borrow_mut());
+        let mut w = self.metrics(sp.mono, sp.bold).advance(sp.s, sp.size, &mut self.warn.borrow_mut());
         if sp.ls != 0.0 {
             w += sp.ls * sp.s.chars().count() as f32;
         }
         w
     }
 
-    /// 右对齐，返回 (svg, 实际左边界)。
+    fn flag(&self, msg: String) {
+        let mut b = self.bad.borrow_mut();
+        if !b.contains(&msg) {
+            b.push(msg);
+        }
+    }
+
+    /// 字幕安全区检查：占住 y 900–1000 就记一笔，生成结束后统一报错。
+    fn check_safe(&self, top: f32, bot: f32, what: &str) {
+        if bot > SAFE_TOP && top < SAFE_BOT {
+            self.flag(format!("占用字幕区 y[{top:.0},{bot:.0}]：{what}"));
+        }
+    }
+
     fn text_right(&self, sp: &Spec, right: f32, y: f32) -> String {
         let w = self.tw(sp);
         self.text_at(sp, right - w, y, false)
@@ -301,17 +325,17 @@ impl Ctx {
         if sp.ls != 0.0 {
             let _ = write!(attrs, r#" letter-spacing="{:.1}""#, sp.ls);
         }
-        // 居中时把字距的尾随量折掉，避免整行右偏
         let x = if center && sp.ls != 0.0 { x - sp.ls * 0.5 } else { x };
         let w = self.tw(sp);
         let (l, r) = if center { (x - w / 2.0, x + w / 2.0) } else { (x, x + w) };
         if l < 16.0 || r > 1904.0 {
-            let msg = format!("超出安全区 x[{l:.0},{r:.0}]  {}", sp.s);
+            let msg = format!("超出左右安全区 x[{l:.0},{r:.0}]  {}", sp.s);
             let mut wr = self.warn.borrow_mut();
             if !wr.contains(&msg) {
                 wr.push(msg);
             }
         }
+        self.check_safe(y - sp.size * 0.95, y + sp.size * 0.28, sp.s);
         format!(
             r#"<text x="{x:.1}" y="{y:.1}" font-family="{fam}" font-size="{:.1}" fill="{}" fill-opacity="{:.3}"{attrs}>{}</text>"#,
             sp.size,
@@ -322,12 +346,10 @@ impl Ctx {
     }
 }
 
-/// 普通文字（不保留空格）。
 fn txt(ctx: &Ctx, s: &str, size: f32, fill: &str, a: f32, x: f32, y: f32, center: bool) -> String {
     ctx.text_at(&spec(s, size, fill, a), x, y, center)
 }
 
-/// 等宽文字。
 fn mono(ctx: &Ctx, s: &str, size: f32, fill: &str, a: f32, x: f32, y: f32, center: bool) -> String {
     let sp = Spec { s, size, fill, alpha: a, mono: true, bold: false, ls: 0.0 };
     ctx.text_at(&sp, x, y, center)
@@ -354,17 +376,12 @@ fn ease_out_cubic(x: f32) -> f32 {
     1.0 - y * y * y
 }
 
-/// 落位用：先越过目标一点再回弹，像字块被放上去。
+/// 落位用：先越过目标一点再回弹。
 fn ease_out_back(x: f32) -> f32 {
     let p = clamp01(x);
-    let c1 = 1.35;
+    let c1 = 1.25;
     let c3 = c1 + 1.0;
     1.0 + c3 * (p - 1.0).powi(3) + c1 * (p - 1.0).powi(2)
-}
-
-/// 一段时间内的「亮起」包络：起、亮、落。
-fn ping(t: f32, start: f32, hold: f32) -> f32 {
-    ramp(t, start, 0.45) * (1.0 - ramp(t, start + hold, 0.45))
 }
 
 fn rect(
@@ -381,9 +398,7 @@ fn rect(
         return String::new();
     }
     let st = match stroke {
-        Some((c, sw, sa)) => format!(
-            r#" stroke="{c}" stroke-width="{sw:.1}" stroke-opacity="{sa:.3}""#
-        ),
+        Some((c, sw, sa)) => format!(r#" stroke="{c}" stroke-width="{sw:.1}" stroke-opacity="{sa:.3}""#),
         None => String::new(),
     };
     format!(
@@ -400,39 +415,74 @@ fn line(x1: f32, y1: f32, x2: f32, y2: f32, c: &str, w: f32, a: f32) -> String {
     )
 }
 
-fn dot(cx: f32, cy: f32, r: f32, c: &str, a: f32) -> String {
+fn dashed(x1: f32, y1: f32, x2: f32, y2: f32, c: &str, w: f32, a: f32, dash: &str) -> String {
     if a <= 0.004 {
         return String::new();
     }
     format!(
-        r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="{c}" fill-opacity="{a:.3}"/>"#
+        r#"<line x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}" stroke="{c}" stroke-width="{w:.1}" stroke-opacity="{a:.3}" stroke-dasharray="{dash}" stroke-linecap="round"/>"#
     )
 }
 
-/// 把字幕包成一组，便于断言「一帧最多一套字幕」。
-fn cap_group(inner: String) -> String {
-    if inner.is_empty() {
-        String::new()
-    } else {
-        format!(r#"<g data-cap="1">{inner}</g>"#)
+fn dot(cx: f32, cy: f32, r: f32, c: &str, a: f32) -> String {
+    if a <= 0.004 {
+        return String::new();
     }
+    format!(r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="{c}" fill-opacity="{a:.3}"/>"#)
 }
 
-/// 底部分段进度：`n` 段，当前段按 `frac` 推进。
-fn slider(b: &mut String, n: usize, cur: usize, frac: f32, y: f32) {
-    let pw = 156.0;
-    let pg = 16.0;
-    let totalw = n as f32 * pw + (n.saturating_sub(1)) as f32 * pg;
-    let sx = (FW - totalw) / 2.0;
-    for i in 0..n {
-        let x = sx + i as f32 * (pw + pg);
-        b.push_str(&rect(x, y, pw, 4.0, 2.0, "#1b2434", 0.95, None));
-        if i < cur {
-            b.push_str(&rect(x, y, pw, 4.0, 2.0, C_ACC, 0.40, None));
-        } else if i == cur {
-            b.push_str(&rect(x, y, pw * clamp01(frac), 4.0, 2.0, C_ACC, 0.95, None));
-        }
+fn ring(cx: f32, cy: f32, r: f32, c: &str, w: f32, a: f32) -> String {
+    if a <= 0.004 {
+        return String::new();
     }
+    format!(
+        r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="{c}" stroke-width="{w:.1}" stroke-opacity="{a:.3}"/>"#
+    )
+}
+
+/// 圆弧（度，0 在正右、顺时针增长，因为 SVG 的 y 朝下）。
+fn arc(cx: f32, cy: f32, r: f32, from: f32, sweep: f32, c: &str, w: f32, a: f32) -> String {
+    if a <= 0.004 {
+        return String::new();
+    }
+    let p = |deg: f32| {
+        let t = deg.to_radians();
+        (cx + r * t.cos(), cy + r * t.sin())
+    };
+    let (x0, y0) = p(from);
+    let (x1, y1) = p(from + sweep);
+    let large = if sweep.abs() > 180.0 { 1 } else { 0 };
+    let dir = if sweep >= 0.0 { 1 } else { 0 };
+    format!(
+        r#"<path d="M{x0:.1} {y0:.1} A{r:.1} {r:.1} 0 {large} {dir} {x1:.1} {y1:.1}" fill="none" stroke="{c}" stroke-width="{w:.1}" stroke-opacity="{a:.3}" stroke-linecap="round"/>"#
+    )
+}
+
+/// 胶囊标签：返回 (svg, 宽度)。y 为垂直中心。
+fn pill(
+    ctx: &Ctx,
+    s: &str,
+    x: f32,
+    y: f32,
+    size: f32,
+    fg: &str,
+    bg: &str,
+    a: f32,
+    padx: f32,
+) -> (String, f32) {
+    if a <= 0.004 {
+        return (String::new(), 0.0);
+    }
+    let sp = spec(s, size, fg, a);
+    let w = ctx.tw(&sp) + padx * 2.0;
+    let h = size * 1.9;
+    let mut out = rect(x, y - h / 2.0, w, h, h / 2.0, bg, a * 0.9, None);
+    out.push_str(&ctx.text_at(&sp, x + padx, y + size * 0.34, false));
+    (out, w)
+}
+
+fn pill_w(ctx: &Ctx, s: &str, size: f32, padx: f32) -> f32 {
+    ctx.tw(&spec(s, size, C_TXT, 1.0)) + padx * 2.0
 }
 
 // ---------------------------------------------------------------- 背景与外框
@@ -444,11 +494,19 @@ fn background(progress: f32, section: &str, ctx: &Ctx) -> String {
 <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
 <stop offset="0" stop-color="#0c1420"/>
 <stop offset="0.55" stop-color="#090d15"/>
-<stop offset="1" stop-color="#06080d"/>
+<stop offset="1" stop-color="#05070c"/>
 </linearGradient>
 <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
 <stop offset="0" stop-color="{C_ACC}" stop-opacity="0.10"/>
 <stop offset="0.6" stop-color="{C_ACC}" stop-opacity="0.00"/>
+</linearGradient>
+<linearGradient id="fadeup" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#090d15" stop-opacity="1"/>
+<stop offset="1" stop-color="#090d15" stop-opacity="0"/>
+</linearGradient>
+<linearGradient id="fadedown" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#090d15" stop-opacity="0"/>
+<stop offset="1" stop-color="#090d15" stop-opacity="1"/>
 </linearGradient>
 </defs>
 <rect width="{FW}" height="{FH}" fill="url(#bg)"/>
@@ -456,7 +514,6 @@ fn background(progress: f32, section: &str, ctx: &Ctx) -> String {
 "##
     ));
 
-    // 静态网格：一排细线，给画面一点工程感，同时几乎不增加码率
     let mut d = String::new();
     let mut x = 96.0;
     while x < FW {
@@ -476,562 +533,867 @@ fn background(progress: f32, section: &str, ctx: &Ctx) -> String {
     // 页眉
     b.push_str(&rect(160.0, 62.0, 9.0, 9.0, 1.5, C_ACC, 0.9, None));
     b.push_str(&mono(ctx, "mathengine", 22.0, C_DIM, 0.75, 182.0, 74.0, false));
-    let sec = Spec { s: section, size: 20.0, fill: C_SUB, alpha: 0.95, mono: false, bold: false, ls: 3.0 };
-    b.push_str(&ctx.text_at(&sec, 1758.0, 74.0, true));
+    let sec = Spec { s: section, size: 19.0, fill: C_SUB, alpha: 0.95, mono: false, bold: false, ls: 3.0 };
+    b.push_str(&ctx.text_at(&sec, 1758.0, 72.0, true));
 
-    // 页脚进度条 + 分段刻度
+    // 页脚进度条（y=1030，落在字幕区之下）
     let bx = 160.0;
     let bw = 1600.0;
-    b.push_str(&rect(bx, 1030.0, bw, 2.0, 1.0, "#1b2434", 1.0, None));
-    b.push_str(&rect(bx, 1030.0, bw * clamp01(progress), 2.0, 1.0, C_ACC, 0.75, None));
+    b.push_str(&rect(bx, 1030.0, bw, 2.0, 1.0, "#29384c", 1.0, None));
+    b.push_str(&rect(bx, 1030.0, bw * clamp01(progress), 2.0, 1.0, C_ACC, 0.70, None));
     for (f, _) in SCENES.iter().skip(1) {
         let tx = bx + bw * (*f as f32 / (TOTAL - 1) as f32);
-        b.push_str(&rect(tx - 0.5, 1026.0, 1.0, 10.0, 0.5, C_DIM, 0.28, None));
+        b.push_str(&rect(tx - 0.5, 1026.0, 1.0, 10.0, 0.5, C_DIM, 0.25, None));
     }
     b
 }
 
-// ---------------------------------------------------------------- 场景公共件
-
-fn scene_head(ctx: &Ctx, b: &mut String, overline: &str, title: &str, a: f32) {
-    let over = Spec { s: overline, size: 22.0, fill: C_ACC, alpha: a, mono: false, bold: false, ls: 8.0 };
-    b.push_str(&ctx.text_at(&over, 200.0, 214.0, false));
-    let ttl = Spec { s: title, size: 52.0, fill: C_TXT, alpha: a, mono: false, bold: true, ls: 0.0 };
-    b.push_str(&ctx.text_at(&ttl, 200.0, 282.0, false));
-    b.push_str(&rect(170.0, 240.0, 5.0, 50.0, 2.5, C_ACC, a, None));
-}
-
-/// 页脚小字：第三档层次，固定贴在进度条上方。
-fn footnote(ctx: &Ctx, s: &str, a: f32) -> String {
-    if a <= 0.004 {
-        return String::new();
-    }
-    let sp = Spec { s, size: 18.0, fill: C_FOOT, alpha: a, mono: false, bold: false, ls: 0.6 };
-    ctx.text_at(&sp, 200.0, 978.0, false)
-}
-
-// ---------------------------------------------------------------- 场景一：封面
-
-fn scene_cover(ctx: &Ctx, art: &Art, t: f32) -> String {
+fn section_head(ctx: &Ctx, overline: &str, title: &str, a: f32) -> String {
     let mut b = String::new();
-
-    let over = Spec { s: "用 Rust 从零写的 · 不用 Java · 不用浏览器", size: 24.0, fill: C_ACC, alpha: ramp(t, 0.05, 0.55), mono: false, bold: false, ls: 8.0 };
-    b.push_str(&ctx.text_at(&over, 960.0, 300.0, true));
-
-    let title = Spec { s: "mathengine", size: 152.0, fill: C_TXT, alpha: ramp(t, 0.15, 0.65), mono: true, bold: true, ls: 0.0 };
-    let dy = 26.0 * (1.0 - ramp(t, 0.15, 0.75));
-    b.push_str(&ctx.text_at(&title, 960.0, 470.0 + dy, true));
-
-    b.push_str(&txt(ctx, "给手机用的公式排版引擎", 48.0, C_DIM, ramp(t, 0.55, 0.6), 960.0, 560.0 + dy * 0.5, true));
-
-    // 分隔线由中心向两侧展开
-    let grow = ramp(t, 0.75, 0.7);
-    if grow > 0.01 {
-        let w = 300.0 * grow;
-        b.push_str(&rect(960.0 - w / 2.0, 612.0, w, 2.0, 1.0, C_ACC, 0.85, None));
-    }
-
-    let contest = Spec { s: "第 38 届苏州市青少年科技创新大赛", size: 28.0, fill: C_DIM, alpha: ramp(t, 1.0, 0.6), mono: false, bold: false, ls: 3.0 };
-    b.push_str(&ctx.text_at(&contest, 960.0, 682.0, true));
-
-    let deco = ramp(t, 1.35, 0.85);
-    b.push_str(&draw_art(ctx, art, 960.0, 858.0, 96.0, 1500.0, 200.0, C_TXT, 0.46 * deco));
-
-    b.push_str(&footnote(ctx, "全片画面由引擎离线逐帧生成，不是录屏，也不是截图", ramp(t, 2.2, 0.8)));
+    let over = Spec { s: overline, size: 20.0, fill: C_ACC, alpha: a, mono: false, bold: false, ls: 7.0 };
+    b.push_str(&ctx.text_at(&over, 176.0, 180.0, false));
+    let ttl = Spec { s: title, size: 42.0, fill: C_TXT, alpha: a, mono: false, bold: true, ls: 0.0 };
+    b.push_str(&ctx.text_at(&ttl, 176.0, 236.0, false));
+    b.push_str(&rect(146.0, 196.0, 4.0, 42.0, 2.0, C_ACC, a, None));
     b
 }
 
-// ---------------------------------------------------------------- 场景二：公式演示
+// ---------------------------------------------------------------- 一、网页方案
 
-/// 开头的四条公式：普通公式一条一条出来，先让人看见东西。
-const SHOW_SRC: [(&str, &str, &str); 4] = [
-    (r"x=\frac{-b\pm\sqrt{b^{2}-4ac}}{2a}", "二次方程", "分式、根号、上下标，挤进一条里"),
-    (r"\int_{-\infty}^{\infty} e^{-x^{2}}\,dx=\sqrt{\pi}", "积分", "上下限贴在积分号的上下，字号自动变小"),
-    (r"\sum_{i=1}^{n} i^{2}=\frac{n(n+1)(2n+1)}{6}", "求和", "求和号的上下限，右边再跟一个分式"),
-    (r"x_{1}^{2}+x_{2}^{2}+\cdots+x_{n}^{2}", "上下标", "上标抬高、下标压低，位置一个不差"),
-];
-
-fn scene_show(ctx: &Ctx, shows: &[Shot], local: usize) -> String {
+fn scene_web(ctx: &Ctx, t: f32) -> String {
     let mut b = String::new();
-    let cur = (local / SHOW_SLOT).min(shows.len() - 1);
-    let t = (local % SHOW_SLOT) as f32 / FPS;
-    let sh = &shows[cur];
+    let ea = ramp(t, 0.0, 0.7);
 
-    scene_head(ctx, &mut b, "公式演示", "这是它画出来的", 1.0);
+    b.push_str(&section_head(ctx, "第一个问题", "网页里的公式，得先有一个浏览器", ea));
 
-    // 右上角：第几条
-    let idxs = format!("第 {} 条 / 共 {} 条", cur + 1, shows.len());
-    let isp = Spec { s: &idxs, size: 20.0, fill: C_FAINT, alpha: 0.95, mono: false, bold: false, ls: 1.0 };
-    b.push_str(&ctx.text_right(&isp, 1758.0, 214.0));
+    // ---- 浏览器窗口
+    let (wx, wy, ww, wh) = (120.0, 268.0, 1020.0, 470.0);
+    let wa = ramp(t, 0.25, 0.7);
+    b.push_str(&rect(wx, wy, ww, wh, 14.0, "#0c121c", 0.98 * wa, Some(("#243248", 1.5, wa))));
+    b.push_str(&rect(wx, wy, ww, 46.0, 14.0, "#131c2a", wa, None));
+    b.push_str(&rect(wx, wy + 34.0, ww, 12.0, 0.0, "#131c2a", wa, None));
+    for (i, c) in ["#ff6159", "#ffbd2e", "#28c840"].iter().enumerate() {
+        b.push_str(&dot(wx + 26.0 + i as f32 * 20.0, wy + 23.0, 5.5, c, 0.85 * wa));
+    }
+    b.push_str(&rect(wx + 116.0, wy + 10.0, 610.0, 26.0, 13.0, "#0a0f18", wa, None));
+    b.push_str(&mono(ctx, "https://example.edu/formula-demo", 14.0, C_DIM, 0.85 * wa, wx + 136.0, wy + 28.0, false));
 
-    let n = sh.art.glyphs.len();
-    let stagger = (2.3 / n.max(1) as f32).min(0.17);
-    let g = reveal_art(&sh.art, ctx, 960.0, 512.0, 150.0, 1380.0, 300.0, C_TXT, t, 0.22, stagger, 0.42);
+    // 页内标题与段落骨架
+    b.push_str(&rect(wx + 60.0, wy + 96.0, 360.0, 16.0, 8.0, "#2b3a52", 0.9 * ramp(t, 1.0, 0.5), None));
+    let lines = [
+        (60.0, 1.4, 720.0),
+        (60.0, 1.55, 660.0),
+        (60.0, 1.7, 700.0),
+        (60.0, 1.85, 420.0),
+    ];
+    for (x, st, w) in lines {
+        b.push_str(&rect(wx + x, wy + 130.0 + (st - 1.4) * 95.0, w, 10.0, 5.0, "#243147", 0.85 * ramp(t, st, 0.5), None));
+    }
+
+    // 公式占位区：三个灰块 + 加载圈
+    let fa = ramp(t, 2.2, 0.6);
+    b.push_str(&rect(wx + 60.0, wy + 200.0, 720.0, 150.0, 10.0, "#0a0f18", fa, Some(("#26344a", 1.2, fa))));
+    b.push_str(&dashed(wx + 60.0, wy + 200.0, wx + 780.0, wy + 200.0, C_FAINT, 1.0, 0.0, "2 6"));
+    let skel = [(190.0, 64.0, 44.0, 52.0), (262.0, 46.0, 38.0, 58.0), (322.0, 96.0, 40.0, 44.0), (430.0, 54.0, 30.0, 62.0)];
+    for (x, w, h, y) in skel {
+        b.push_str(&rect(wx + x, wy + 200.0 + y, w, h, 4.0, "#2a3850", 0.55 * fa, None));
+    }
+    // 转圈
+    let spin = t * 250.0;
+    b.push_str(&arc(1002.0, 332.0, 11.0, spin, 265.0, C_ACC, 3.0, 0.9 * fa));
+    b.push_str(&mono(ctx, "加载中", 14.0, C_DIM, 0.9 * fa, 1020.0, 338.0, false));
+
+    // 加载进度：爬到 62% 卡住，后面小幅抖动
+    let p0 = ease_out_cubic(clamp01((t - 2.4) / 6.0)) * 0.62;
+    let jitter = if t > 9.0 { ((t * 7.0).sin() * 0.006).max(0.0) } else { 0.0 };
+    let prog = (p0 + jitter).min(0.665);
+    b.push_str(&rect(wx + 60.0, wy + 388.0, 720.0, 6.0, 3.0, "#26344a", fa, None));
+    b.push_str(&rect(wx + 60.0, wy + 388.0, 720.0 * prog, 6.0, 3.0, C_AMBER, 0.85 * fa, None));
+    let pct = format!("{:.0}%", prog * 100.0);
+    b.push_str(&mono(ctx, &pct, 15.0, C_AMBER, 0.9 * fa, wx + 60.0 + 720.0 * prog + 12.0, wy + 381.0, false));
+    if t > 9.5 {
+        let blink = 0.55 + 0.45 * (t * 3.0).sin();
+        b.push_str(&txt(ctx, "排版工作停在浏览器里，进度条不动了", 16.0, C_DIM, 0.9 * blink, wx + 60.0, wy + 424.0, false));
+    }
+
+    // ---- 包体积（量级示意）
+    let sa = ramp(t, 7.6, 0.6);
+    b.push_str(&mono(ctx, "包体积 · 量级示意", 16.0, C_SUB, 0.95 * sa, wx, 776.0, false));
+    let bars = [("MathJax 3", 1.00, "约 1.1 MB", C_RED), ("KaTeX + 字体", 0.34, "约 0.35 MB", C_AMBER)];
+    for (i, (name, v, val, col)) in bars.iter().enumerate() {
+        let y = 808.0 + i as f32 * 34.0;
+        let ga = ramp(t, 8.0 + i as f32 * 0.5, 0.9);
+        b.push_str(&mono(ctx, name, 16.0, C_DIM, 0.95 * ga, wx, y + 5.0, false));
+        b.push_str(&rect(wx + 210.0, y - 6.0, 520.0, 10.0, 5.0, "#1b2536", 0.9 * ga, None));
+        let grow = ease_out_cubic(ga);
+        b.push_str(&rect(wx + 210.0, y - 6.0, 520.0 * v * grow, 10.0, 5.0, col, 0.85 * ga, None));
+        b.push_str(&mono(ctx, val, 15.0, C_DIM, 0.95 * ga, wx + 750.0, y + 5.0, false));
+    }
+
+    // ---- 右侧手机：空白页
+    let pa = ramp(t, 11.4, 0.8);
+    let (px, py, pw, ph) = (1332.0, 250.0, 330.0, 552.0);
+    b.push_str(&mono(ctx, "离线 App 里", 16.0, C_SUB, 0.9 * pa, px + pw / 2.0, py - 22.0, true));
+    let lift = (1.0 - ease_out_cubic(pa)) * 26.0;
+    b.push_str(&rect(px, py + lift, pw, ph, 40.0, "#0a0f17", pa, Some(("#2b3a52", 2.0, pa))));
+    b.push_str(&rect(px + 10.0, py + 10.0 + lift, pw - 20.0, ph - 20.0, 32.0, "#070b12", pa, None));
+    b.push_str(&rect(px + pw / 2.0 - 34.0, py + 18.0 + lift, 68.0, 6.0, 3.0, "#1d2838", pa, None));
+
+    // 页面内容缺失：只剩占位框
+    let inner_a = pa * ramp(t, 12.0, 0.6);
+    b.push_str(&rect(px + 34.0, py + 66.0 + lift, 150.0, 12.0, 6.0, "#202c40", 0.8 * inner_a, None));
+    b.push_str(&rect(px + 34.0, py + 96.0 + lift, 230.0, 9.0, 4.5, "#1a2536", 0.8 * inner_a, None));
+    b.push_str(&rect(px + 34.0, py + 116.0 + lift, 196.0, 9.0, 4.5, "#1a2536", 0.8 * inner_a, None));
+    b.push_str(&rect(px + 34.0, py + 160.0 + lift, 262.0, 150.0, 8.0, "#0b111b", inner_a, Some(("#2a3a52", 1.0, inner_a))));
+    b.push_str(&rect(px + 34.0, py + 404.0 + lift, 262.0, 10.0, 5.0, "#1a2536", 0.9 * inner_a, None));
+    b.push_str(&rect(px + 34.0, py + 426.0 + lift, 200.0, 10.0, 5.0, "#1a2536", 0.9 * inner_a, None));
+    b.push_str(&rect(px + 34.0, py + 448.0 + lift, 232.0, 10.0, 5.0, "#1a2536", 0.9 * inner_a, None));
+
+    let fail = ramp(t, 13.2, 0.6);
+    b.push_str(&arc(px + 165.0, py + 228.0 + lift, 16.0, t * 300.0, 250.0, C_RED, 3.0, 0.75 * fail * (1.0 - ramp(t, 15.0, 0.6))));
+    if t > 15.0 {
+        let s = ease_out_back(ramp(t, 15.0, 0.5));
+        let cx = px + 165.0;
+        let cy = py + 228.0 + lift;
+        b.push_str(&ring(cx, cy, 26.0 * s, C_RED, 2.0, 0.9 * fail));
+        b.push_str(&line(cx - 9.0 * s, cy - 9.0 * s, cx + 9.0 * s, cy + 9.0 * s, C_RED, 3.4, 0.95 * fail));
+        b.push_str(&line(cx + 9.0 * s, cy - 9.0 * s, cx - 9.0 * s, cy + 9.0 * s, C_RED, 3.4, 0.95 * fail));
+    }
+    let ta = ramp(t, 15.6, 0.6);
+    b.push_str(&txt(ctx, "无法显示公式", 20.0, C_TXT, 0.95 * ta, px + 165.0, py + 352.0 + lift, true));
+    b.push_str(&txt(ctx, "缺少浏览器内核", 15.0, C_RED, 0.85 * ta, px + 165.0, py + 380.0 + lift, true));
+    b.push_str(&txt(ctx, "页面打不开", 15.0, C_FAINT, 0.9 * ramp(t, 17.0, 0.6), px + 165.0, 846.0, true));
+
+    // 右上角三条结论
+    let items = ["体积大", "依赖浏览器", "首屏等待"];
+    let mut x;
+    let mut widths = Vec::new();
+    for s in items {
+        widths.push(pill_w(ctx, s, 17.0, 16.0));
+    }
+    let total: f32 = widths.iter().sum::<f32>() + 12.0 * 2.0;
+    x = 1796.0 - total;
+    for (i, s) in items.iter().enumerate() {
+        let ga = ramp(t, 18.6 + i as f32 * 0.35, 0.5);
+        let (svg, w) = pill(ctx, s, x, 196.0, 17.0, C_RED, "#1b1218", ga * 0.95, 16.0);
+        b.push_str(&svg);
+        x += w + 12.0;
+    }
+
+    b
+}
+
+// ---------------------------------------------------------------- 二、原理
+
+struct CodePanel {
+    lines: Vec<String>,
+    start_no: usize,
+    size: f32,
+    lh: f32,
+    x: f32,
+    y0: f32,
+}
+
+fn draw_code(ctx: &Ctx, c: &CodePanel, revealed: usize, hi: (usize, usize), ha: f32) -> String {
+    let mut b = String::new();
+    let (px, py, pw, ph) = (100.0, 292.0, 860.0, 566.0);
+    b.push_str(&rect(px, py, pw, ph, 12.0, C_PANEL2, 0.97, Some(("#22304a", 1.2, 0.9))));
+    // 标题条
+    b.push_str(&rect(px, py, pw, 42.0, 12.0, "#121a27", 0.98, None));
+    b.push_str(&rect(px, py + 30.0, pw, 12.0, 0.0, "#121a27", 0.98, None));
+    b.push_str(&dot(px + 22.0, py + 21.0, 4.5, C_ACC, 0.8));
+    b.push_str(&mono(ctx, "src/layout.rs", 14.0, C_DIM, 0.95, px + 38.0, py + 26.0, false));
+    let range = format!("{}–{} 行", c.start_no, c.start_no + c.lines.len() - 1);
+    b.push_str(&ctx.text_right(&spec(&range, 13.0, C_FAINT, 0.9), px + pw - 18.0, py + 26.0));
+    b.push_str(&line(px, py + 42.0, px + pw, py + 42.0, "#22304a", 1.0, 0.9));
+
+    // 高亮条
+    if ha > 0.01 && hi.1 >= hi.0 {
+        let y1 = c.y0 + hi.0 as f32 * c.lh - c.lh * 0.78;
+        let y2 = c.y0 + hi.1 as f32 * c.lh + c.lh * 0.24;
+        b.push_str(&rect(px + 2.0, y1, pw - 4.0, y2 - y1, 4.0, C_ACC, 0.09 * ha, None));
+        b.push_str(&rect(px + 2.0, y1, 3.0, y2 - y1, 1.5, C_ACC, 0.9 * ha, None));
+    }
+
+    for (i, s) in c.lines.iter().enumerate() {
+        if i >= revealed {
+            break;
+        }
+        let y = c.y0 + i as f32 * c.lh;
+        let no = format!("{:>4}", c.start_no + i);
+        b.push_str(&mono(ctx, &no, c.size * 0.92, C_FAINT, 0.55, px + 16.0, y, false));
+        let a = if i + 1 >= revealed { 0.55 } else { 1.0 };
+        b.push_str(&mono(ctx, s, c.size, "#d3dde9", 0.92 * a, c.x, y, false));
+    }
+    b
+}
+
+fn stage_of(t: f32) -> (usize, f32) {
+    let k = ((t / 13.0).floor() as usize).min(3);
+    (k, t - k as f32 * 13.0)
+}
+
+fn scene_how(ctx: &Ctx, art: &Art, code: &CodePanel, t: f32) -> String {
+    let mut b = String::new();
+    let ea = ramp(t, 0.0, 0.6);
+    b.push_str(&section_head(ctx, "怎么做的", "一行公式，拆成符号，算出坐标，再画出来", ea));
+
+    let (stage, st) = stage_of(t);
+    // 代码：0–4.5 s 逐行出现
+    let revealed = ((t / 0.14) as usize).min(code.lines.len());
+    let hi = match stage {
+        0 => (2usize, 3usize),
+        1 => (9usize, 13usize),
+        2 => (18usize, 19usize),
+        _ => (0usize, code.lines.len() - 1),
+    };
+    b.push_str(&draw_code(ctx, code, revealed, hi, ramp(t, 0.2, 0.6)));
+
+    // 右侧舞台
+    let (sx, sy, sw, sh) = (1002.0, 292.0, 818.0, 566.0);
+    b.push_str(&rect(sx, sy, sw, sh, 12.0, "#080d15", 0.55, Some(("#1c2a3e", 1.0, 0.8))));
+
+    // 步骤指示
+    let titles = ["读入公式文本", "拆成符号单元", "算出每个坐标", "按坐标绘制"];
+    for i in 0..4 {
+        let x = sx + 30.0 + i as f32 * 196.0;
+        let on = i == stage;
+        let done = i < stage;
+        b.push_str(&dot(x + 5.0, sy + 28.0, 5.0, if on { C_ACC } else { C_FAINT }, if on { 1.0 } else { 0.55 }));
+        let c = if on { C_TXT } else if done { C_DIM } else { C_FAINT };
+        b.push_str(&txt(ctx, titles[i], 15.0, c, if on { 0.98 } else if done { 0.85 } else { 0.62 }, x + 18.0, sy + 33.0, false));
+    }
+
+    // 阶段说明
+    let cap = match stage {
+        0 => format!("一条 LaTeX 字符串，{} 个字符", art.latex.chars().count()),
+        1 => format!("按布局顺序切成 {} 个符号单元", art.glyphs.len()),
+        2 => "每个单元都有 x、y 与缩放".to_string(),
+        _ => "同一份布局数据，逐帧离线生成画面".to_string(),
+    };
+    b.push_str(&txt(ctx, &cap, 21.0, C_DIM, 0.95 * ramp(t, 0.4, 0.5), sx + 30.0, sy + 78.0, false));
+
+    // 原始文本（阶段一）
+    let ta = ramp(t, 0.5, 0.5) * (1.0 - ramp(t, 12.3, 0.6));
+    if ta > 0.01 {
+        let n = ((st - 0.6) / 0.09).max(0.0) as usize;
+        let chars: Vec<char> = art.latex.chars().collect();
+        let shown: String = chars.iter().take(n.min(chars.len())).collect();
+        let size = 26.0;
+        let tw = ctx.tw(&spec(art.latex.as_str(), size, C_TXT, 1.0));
+        let tx = 1411.0 - tw / 2.0;
+        let ty = 512.0;
+        b.push_str(&rect(tx - 26.0, ty - 44.0, tw + 52.0, 70.0, 8.0, "#0c131f", 0.95 * ta, Some(("#233248", 1.0, ta))));
+        b.push_str(&mono(ctx, &shown, size, C_TXT, 0.96 * ta, tx, ty, false));
+        // 光标
+        let cw = ctx.tw(&spec(&shown, size, C_TXT, 1.0));
+        let blink = if (t * 2.2).sin() > -0.2 { 1.0 } else { 0.0 };
+        b.push_str(&rect(tx + cw + 3.0, ty - size * 0.78, 2.2, size * 0.95, 1.0, C_ACC, ta * blink, None));
+        b.push_str(&mono(ctx, "latex 输入", 13.0, C_FAINT, 0.9 * ta, tx - 26.0, ty + 52.0, false));
+    }
+
+    // 阶段一：字符数 + 解析出的结构
+    let sa = ramp(t, 3.6, 0.6) * (1.0 - ramp(t, 12.2, 0.5));
+    if sa > 0.01 {
+        let chars = art.latex.chars().count();
+        let info = format!("{chars} 个字符 → {} 个符号单元", art.glyphs.len());
+        b.push_str(&mono(ctx, &info, 15.0, C_DIM, 0.9 * sa, 1411.0, 588.0, true));
+        let chips = ["分式", "根号", "上标", "二元运算"];
+        let widths: Vec<f32> = chips.iter().map(|c| pill_w(ctx, c, 15.0, 14.0)).collect();
+        let total: f32 = widths.iter().sum::<f32>() + 10.0 * 3.0;
+        let mut x = 1411.0 - total / 2.0;
+        for (i, c) in chips.iter().enumerate() {
+            let ga = ramp(t, 4.2 + i as f32 * 0.35, 0.55) * sa;
+            let (svg, w) = pill(ctx, c, x, 660.0, 15.0, C_SUB, "#101a26", ga, 14.0);
+            b.push_str(&svg);
+            x += w + 10.0;
+        }
+    }
+
+    // 符号单元 → 坐标 → 绘制
+    let n = art.glyphs.len();
+    let k_fit = {
+        let avail_w = 760.0;
+        let avail_h = 400.0;
+        (avail_w / art.width).min(avail_h / (art.height + art.depth)) * 0.92
+    };
+    let cx0 = 1411.0;
+    let cy0 = 596.0;
+    let left = cx0 - art.width * k_fit / 2.0;
+    let baseline0 = cy0 + (art.height - art.depth) * k_fit / 2.0;
+
+    let grid_cols = 4usize;
+    let tile = 136.0;
+    let gap = 22.0;
+    let grid_w = grid_cols as f32 * tile + (grid_cols - 1) as f32 * gap;
+    let rows = n.div_ceil(grid_cols);
+    let grid_h = rows as f32 * tile + (rows - 1) as f32 * gap;
+    let gx0 = cx0 - grid_w / 2.0 + tile / 2.0;
+    let gy0 = 634.0 - grid_h / 2.0 + tile / 2.0;
+
+    let mut g = String::from(r#"<g data-formula="1">"#);
+    for (i, gl) in art.glyphs.iter().enumerate() {
+        let (bx0, by0, bx1, by1) = gl.bb;
+        let bcx = (bx0 + bx1) / 2.0;
+        let bcy = (by0 + by1) / 2.0;
+        let bwh = ((bx1 - bx0).max(1.0)).max(by1 - by0);
+        let k_tile = 70.0 / bwh.max(1.0);
+        let k_final = k_fit * gl.scale;
+
+        let (gcx, gcy) = (gx0 + (i % grid_cols) as f32 * (tile + gap), gy0 + (i / grid_cols) as f32 * (tile + gap));
+        let (fcx, fcy) = (left + gl.x * k_fit + bcx * k_final, baseline0 - gl.y * k_fit - bcy * k_final);
+
+        // 阶段一：藏在文本中心；二：飞到网格；三：飞到坐标；四：只留字形
+        let p_b = ease_out_back(clamp01((t - 12.9 - i as f32 * 0.04) / 0.95));
+        let p_c = ease_out_cubic(clamp01((t - 25.9 - i as f32 * 0.03) / 1.15));
+        let grow = 1.0 + 0.10 * ease_out_cubic(clamp01((t - 39.0) / 1.0));
+        let cx = cx0 + (gcx - cx0) * p_b + (fcx - gcx) * p_c;
+        let cy = 512.0 + (gcy - 512.0) * p_b + (fcy - gcy) * p_c;
+        let k = k_tile + (k_final - k_tile) * p_c;
+        let k = k * (1.0 + (grow - 1.0) * p_c);
+        let alpha = ramp(t, 12.9 + i as f32 * 0.04, 0.35);
+        let frame_a = p_b * (1.0 - p_c) * (1.0 - ramp(t, 39.0, 0.6));
+        let idx_a = (1.0 - p_c) * (1.0 - ramp(t, 39.0, 0.5)) * p_b;
+        if alpha > 0.01 {
+            let (px, py) = (cx - bcx * k, cy + bcy * k);
+            if frame_a > 0.01 {
+                let half = tile / 2.0 * (1.0 - 0.38 * p_c) * (0.85 + 0.15 * p_b);
+                g.push_str(&rect(cx - half, cy - half, half * 2.0, half * 2.0, 10.0, "#0d1521", 0.9 * frame_a, Some(("#24344c", 1.2, frame_a))));
+            }
+            let _ = write!(
+                g,
+                r#"<path transform="translate({px:.2} {py:.2}) scale({k:.5})" fill="{}" fill-opacity="{alpha:.3}" d="{}"/>"#,
+                C_TXT, gl.d
+            );
+            if idx_a > 0.01 {
+                g.push_str(&mono(ctx, &format!("{:02}", i + 1), 12.0, C_ACC, 0.75 * idx_a * alpha, cx - tile / 2.0 + 14.0, cy - tile / 2.0 + 22.0, false));
+            }
+        }
+    }
+    // 分数线（阶段三之后）
+    let ra = ramp(t, 27.0, 0.8);
+    if ra > 0.01 {
+        for r in &art.rules {
+            let x = left + r.x * k_fit;
+            let y = baseline0 - r.y * k_fit;
+            g.push_str(&rect(x, y, r.w * k_fit * ra, (r.th * k_fit).max(1.6), 0.5, C_TXT, 0.95, None));
+        }
+    }
+    g.push_str("</g>");
     b.push_str(&g);
 
-    // 一条字幕：名字 + 一句说明
-    let ca = ramp(t, 2.95, 0.55);
-    let name = txt(ctx, sh.name, 34.0, C_TXT, ca, 960.0, 726.0, true);
-    let note = txt(ctx, sh.note, 24.0, C_DIM, ramp(t, 3.2, 0.55), 960.0, 766.0, true);
-    b.push_str(&cap_group(format!("{name}{note}")));
-
-    // 输入：一行文字
-    let ia = ramp(t, 6.2, 0.6);
-    if ia > 0.004 {
-        let lab = Spec { s: "输入", size: 21.0, fill: C_DIM, alpha: ia, mono: false, bold: false, ls: 2.0 };
-        let src = Spec { s: &sh.latex, size: 21.0, fill: C_TXT, alpha: 0.92 * ia, mono: true, bold: false, ls: 0.0 };
-        let lw = ctx.tw(&lab);
-        let w = lw + 16.0 + ctx.tw(&src);
-        let x = 960.0 - w / 2.0;
-        b.push_str(&rect(x - 24.0, 792.0, w + 48.0, 44.0, 10.0, "#0d1420", 0.92 * ia, Some((C_LINE, 1.2, ia))));
-        b.push_str(&ctx.text_at(&lab, x, 820.0, false));
-        b.push_str(&ctx.text_at(&src, x + lw + 16.0, 820.0, false));
+    // 阶段三：轮播一个符号的坐标读数
+    let ra2 = ramp(t, 27.0, 0.6) * (1.0 - ramp(t, 39.2, 0.5));
+    if ra2 > 0.01 && t > 26.0 {
+        let pick = (((t - 26.0) / 2.3) as usize) % n;
+        let g0 = &art.glyphs[pick];
+        let line1 = format!("第 {:02} 个符号单元   ·   x = {:.0}   y = {:.0}   缩放 {:.2}", pick + 1, g0.x, g0.y, g0.scale);
+        let w = ctx.tw(&spec(&line1, 15.0, C_TXT, 1.0));
+        b.push_str(&rect(1411.0 - w / 2.0 - 16.0, 404.0, w + 32.0, 30.0, 8.0, "#0c1420", 0.9 * ra2, Some(("#26364e", 1.0, 0.9 * ra2))));
+        b.push_str(&mono(ctx, &line1, 15.0, C_BLUE, 0.95 * ra2, 1411.0 - w / 2.0, 425.0, false));
+        // 圈出当前读数对应的那个符号
+        let (bx0, by0, bx1, by1) = g0.bb;
+        let gl_cx = left + g0.x * k_fit + (bx0 + bx1) / 2.0 * k_fit * g0.scale;
+        let gl_cy = baseline0 - g0.y * k_fit - (by0 + by1) / 2.0 * k_fit * g0.scale;
+        let half_w = (bx1 - bx0) * k_fit * g0.scale / 2.0 + 8.0;
+        let half_h = (by1 - by0) * k_fit * g0.scale / 2.0 + 8.0;
+        let pulse = 0.6 + 0.4 * ((t * 3.0).sin() * 0.5 + 0.5);
+        b.push_str(&rect(gl_cx - half_w, gl_cy - half_h, half_w * 2.0, half_h * 2.0, 6.0, C_BLUE, 0.07 * ra2, Some((C_BLUE, 1.8, 0.65 * ra2 * pulse))));
     }
 
-    // 实测耗时（当场测，不是抄来的）
-    let stat = format!("画出来 {} 个符号 · 算一遍 {}", n, us_text(sh.micros));
-    b.push_str(&mono(ctx, &stat, 20.0, C_SUB, ramp(t, 8.6, 0.6), 960.0, 886.0, true));
+    // 坐标轴：阶段三出现
+    let axa = ramp(t, 26.6, 0.7) * (1.0 - ramp(t, 39.0, 0.6));
+    if axa > 0.01 {
+        // 基线只在公式两侧画，避免虚线压在字形上
+        b.push_str(&dashed(1018.0, baseline0, left - 18.0, baseline0, C_BLUE, 1.2, 0.45 * axa, "5 6"));
+        b.push_str(&dashed(left + art.width * k_fit + 18.0, baseline0, 1804.0, baseline0, C_BLUE, 1.2, 0.45 * axa, "5 6"));
+        let x0 = left - 30.0;
+        b.push_str(&dashed(x0, 400.0, x0, 790.0, C_BLUE, 1.2, 0.22 * axa, "4 8"));
+        // 尺寸标注
+        let dy = baseline0 + art.depth * k_fit + 26.0;
+        b.push_str(&line(left, dy, left + art.width * k_fit, dy, C_DIM, 1.0, 0.5 * axa));
+        b.push_str(&line(left, dy - 5.0, left, dy + 5.0, C_DIM, 1.0, 0.5 * axa));
+        b.push_str(&line(left + art.width * k_fit, dy - 5.0, left + art.width * k_fit, dy + 5.0, C_DIM, 1.0, 0.5 * axa));
+        let dim = format!("宽 {:.0} · 高 {:.0} · 深 {:.0}（字体单位）", art.width, art.height, art.depth);
+        b.push_str(&mono(ctx, &dim, 14.0, C_DIM, 0.8 * axa, left + art.width * k_fit / 2.0, dy + 34.0, true));
+    }
 
-    let frac = (local % SHOW_SLOT) as f32 / SHOW_SLOT as f32;
-    slider(&mut b, shows.len(), cur, frac, 930.0);
+    // 第四阶段收尾说明
+    let done = ramp(t, 40.0, 0.7);
+    if done > 0.01 {
+        b.push_str(&txt(ctx, "布局结果 → 扁平字形列表 → 一次绘制", 15.0, C_SUB, 0.9 * done, 1411.0, 826.0, true));
+    }
 
-    b.push_str(&footnote(
-        ctx,
-        "先算位置，再一个个落下来；画面由引擎逐帧生成，不是截图",
-        ramp(t, 1.6, 0.8),
-    ));
     b
 }
 
-// ---------------------------------------------------------------- 场景三：复杂矩阵
+// ---------------------------------------------------------------- 三、优势
 
-fn matrix_digits(n: usize) -> String {
-    // 大于 5 行时不用括号：引擎把括号的拉伸倍数卡在 4 倍以内（防止笔画被拉成粗黑条），
-    // 20 行的括号只能包住中间几行，摆在画面里反而像画错了。大矩阵按数字表来展示。
-    let env = if n > 5 { "matrix" } else { "pmatrix" };
-    let mut s = format!(r"\begin{{{env}}}");
-    for r in 0..n {
-        for c in 0..n {
-            if c > 0 {
-                s.push('&');
-            }
-            if n == 2 {
-                let _ = write!(s, "{}", r * 2 + c * 3 + 1);
-            } else {
-                let v = 10 + (r * 37 + c * 11) % 90;
-                let _ = write!(s, "{v}");
-            }
-        }
-        if r + 1 < n {
-            s.push_str(r"\\");
-        }
-    }
-    s.push_str(&format!(r"\end{{{env}}}"));
-    s
-}
-
-const MAT_NAMES: [(&str, &str); 3] = [
-    ("2 × 2", "四个格子，一对括号"),
-    ("5 × 5", "数字有长有短，列还是对齐的"),
-    ("20 × 20", "四百个数字摆在一起，一眼能数清"),
-];
-
-fn scene_matrix(ctx: &Ctx, mats: &[Shot], local: usize) -> String {
+fn scene_size(ctx: &Ctx, kb: u32, t: f32) -> String {
     let mut b = String::new();
-    let (cur, l0) = if local < MAT_SLOT[0] {
-        (0, local)
-    } else if local < MAT_SLOT[0] + MAT_SLOT[1] {
-        (1, local - MAT_SLOT[0])
-    } else {
-        (2, local - MAT_SLOT[0] - MAT_SLOT[1])
-    };
-    let t = l0 as f32 / FPS;
-    let sh = &mats[cur];
+    let ea = ramp(t, 0.0, 0.6);
+    b.push_str(&section_head(ctx, "01 / 03 · 体积", "编译出来只有一个动态库", ea));
 
-    scene_head(ctx, &mut b, "复杂矩阵", "越排越密，也不会乱", 1.0);
-
-    let tag = format!("第 {} 组 / 共 3 组", cur + 1);
-    let tsp = Spec { s: &tag, size: 20.0, fill: C_FAINT, alpha: 0.95, mono: false, bold: false, ls: 1.0 };
-    b.push_str(&ctx.text_right(&tsp, 1758.0, 214.0));
-
-    let n = sh.art.glyphs.len();
-    // 小矩阵两三秒内落完，大矩阵四秒扫完：落子过程要看得见，但不能让半张矩阵停在画面里
-    let stagger = if n > 200 {
-        4.2 / n as f32
-    } else {
-        (2.6 / n.max(1) as f32).min(0.16)
-    };
-    let g = reveal_art(&sh.art, ctx, 960.0, 540.0, 150.0, 1500.0, 500.0, C_TXT, t, 0.25, stagger, 0.34);
-    b.push_str(&g);
-
-    let ca = ramp(t, 1.4, 0.55);
-    let name = txt(ctx, MAT_NAMES[cur].0, 34.0, C_TXT, ca, 960.0, 842.0, true);
-    let note = txt(ctx, MAT_NAMES[cur].1, 24.0, C_DIM, ramp(t, 1.65, 0.55), 960.0, 880.0, true);
-    b.push_str(&cap_group(format!("{name}{note}")));
-
-    let stat = format!("画出来 {} 个符号 · 算一遍 {}", n, us_text(sh.micros));
-    b.push_str(&mono(ctx, &stat, 19.0, C_SUB, ramp(t, 4.4, 0.6), 960.0, 922.0, true));
-
-    if cur == 2 {
-        let more = "40 × 40 的 7202 个符号：算一遍 3.9 毫秒";
-        b.push_str(&mono(ctx, more, 19.0, C_ACC, ramp(t, 10.5, 0.7), 960.0, 946.0, true));
-    }
-
-    b.push_str(&footnote(
-        ctx,
-        "格子的宽窄、行距、每个字的大小，都由引擎自己量出来",
-        ramp(t, 2.4, 0.8),
+    // 文件图标
+    let ia = ease_out_back(ramp(t, 0.3, 0.7));
+    let (fx, fy) = (250.0, 400.0);
+    let fw = 150.0;
+    let fh = 190.0;
+    let s = 0.92 + 0.08 * ia;
+    let cx = fx + fw / 2.0;
+    let cy = fy + fh / 2.0;
+    let (ix, iy) = (cx - fw * s / 2.0, cy - fh * s / 2.0);
+    b.push_str(&format!(
+        r##"<path d="M{ix:.1} {iy:.1} h{:.1} l44 44 v{:.1} h{:.1} z" fill="#101a28" fill-opacity="{:.3}" stroke="#2c3d56" stroke-width="1.5" stroke-opacity="{:.3}"/>"##,
+        fw * s - 44.0,
+        fh * s - 44.0,
+        -(fw * s),
+        0.97 * ia,
+        0.9 * ia
     ));
+    b.push_str(&format!(
+        r##"<path d="M{:.1} {iy:.1} v44 h44" fill="none" stroke="#2c3d56" stroke-width="1.5" stroke-opacity="{:.3}"/>"##,
+        ix + fw * s - 44.0,
+        0.9 * ia
+    ));
+    b.push_str(&mono(ctx, ".so", 30.0, C_ACC, 0.95 * ramp(t, 0.7, 0.5), cx, iy + fh * s * 0.66, true));
+    b.push_str(&mono(ctx, "libmathengine", 12.0, C_FAINT, 0.8 * ramp(t, 0.9, 0.5), cx, iy + fh * s * 0.82, true));
+
+    // 大数字
+    let cnt = kb as f32 * ease_out_cubic(ramp(t, 0.5, 1.6));
+    let num = format!("{:.0}", cnt);
+    let na = ramp(t, 0.4, 0.5);
+    b.push_str(&ctx.text_at(&Spec { s: &num, size: 158.0, fill: C_TXT, alpha: na, mono: false, bold: true, ls: 0.0 }, 690.0, 570.0, true));
+    b.push_str(&txt(ctx, "KB", 54.0, C_ACC, 0.95 * na, 840.0, 552.0, false));
+    b.push_str(&txt(ctx, "编译产物 · 单文件", 22.0, C_DIM, 0.95 * ramp(t, 1.4, 0.6), 690.0, 640.0, true));
+    b.push_str(&mono(ctx, "x86_64 · opt-level=s · LTO · strip", 16.0, C_SUB, 0.9 * ramp(t, 1.8, 0.6), 690.0, 674.0, true));
+    let sta = ramp(t, 2.0, 0.6);
+    b.push_str(&txt(ctx, "源码 2900 余行 Rust · 84 组用例 · 只依赖 ttf-parser", 17.0, C_DIM, 0.95 * sta, 690.0, 720.0, true));
+
+    // 对比条
+    let ba = ramp(t, 2.4, 0.6);
+    b.push_str(&mono(ctx, "体积对比（十进制 KB，量级示意）", 15.0, C_SUB, 0.9 * ba, 1000.0, 400.0, false));
+    let rows = [
+        ("本引擎 .so", kb as f32, format!("{kb} KB"), C_ACC),
+        ("jlatexmath jar", 669.0, "669 KB".to_string(), C_DIM),
+        ("浏览器方案", 1100.0, "约 1100 KB".to_string(), C_RED),
+    ];
+    // 数值列固定右对齐，别跟着条形跑
+
+    let max = 1100.0;
+    for (i, (name, v, val, col)) in rows.iter().enumerate() {
+        let y = 460.0 + i as f32 * 92.0;
+        let ga = ramp(t, 2.6 + i as f32 * 0.45, 0.8);
+        b.push_str(&txt(ctx, name, 19.0, C_DIM, 0.95 * ga, 1000.0, y + 7.0, false));
+        b.push_str(&rect(1000.0, y + 26.0, 700.0, 12.0, 6.0, "#182233", 0.9 * ga, None));
+        let grow = ease_out_cubic(ga);
+        let w = 700.0 * (v / max) * grow;
+        b.push_str(&rect(1000.0, y + 26.0, w, 12.0, 6.0, col, 0.88 * ga, None));
+        let vs = spec(val, 17.0, C_DIM, 0.95 * ga);
+        b.push_str(&ctx.text_right(&vs, 1800.0, y + 37.0));
+    }
+    b.push_str(&txt(ctx, "宿主应用已有字体时，只需再加这一个动态库", 16.0, C_SUB, 0.9 * ramp(t, 4.2, 0.6), 1000.0, 700.0, false));
+
+    // 结论标签
+    let items = ["单文件", "无 JVM", "无浏览器"];
+    let padx = 15.0;
+    let widths: Vec<f32> = items.iter().map(|s| pill_w(ctx, s, 17.0, padx)).collect();
+    let total: f32 = widths.iter().sum::<f32>() + 12.0 * (items.len() - 1) as f32;
+    let mut x = 960.0 - total / 2.0;
+    for (i, s) in items.iter().enumerate() {
+        let ga = ramp(t, 5.0 + i as f32 * 0.25, 0.5);
+        let (svg, w) = pill(ctx, s, x, 792.0, 17.0, C_TXT, "#12202c", 0.95 * ga, padx);
+        b.push_str(&svg);
+        x += w + 12.0;
+    }
     b
 }
 
-// ---------------------------------------------------------------- 场景四：性能对比（表格）
-
-/// 数字取自 docs/EXPERIMENTS.md（实验一、实验九），单位与位数照原表。
-const ROWS: [(&str, &str, &str, &str, &str); 4] = [
-    ("单个变量", "0.71 微秒", "3.43 微秒", "4.8 倍", "一个字母"),
-    ("分式", "1.48 微秒", "3.74 微秒", "2.5 倍", "上下两行，中间一条横线"),
-    ("矩阵 2×2", "3.91 微秒", "19.74 微秒", "5.0 倍", "四个格子加一对括号"),
-    ("超大矩阵 40×40", "3.9 毫秒", "—", "单独测得", "7202 个符号 · 含出图 9.7 毫秒"),
-];
-const ROW_T: [f32; 4] = [0.8, 3.6, 6.4, 9.2];
-
-fn scene_table(ctx: &Ctx, previews: &[Art], t: f32) -> String {
+fn scene_tests(ctx: &Ctx, names: &[String], t: f32) -> String {
     let mut b = String::new();
-    scene_head(ctx, &mut b, "性能对比", "同一批公式，两套实现各花多少时间", 1.0);
+    let ea = ramp(t, 0.0, 0.6);
+    b.push_str(&section_head(ctx, "02 / 03 · 用例", "84 组用例，全部通过", ea));
 
-    // 表头
-    let ha = ramp(t, 0.15, 0.5);
-    let hd = |s: &'static str, x: f32, right: bool| -> String {
-        let sp = Spec { s, size: 22.0, fill: C_DIM, alpha: ha, mono: false, bold: true, ls: 1.0 };
-        if right {
-            ctx.text_right(&sp, x, 396.0)
-        } else {
-            ctx.text_at(&sp, x, 396.0, false)
-        }
-    };
-    b.push_str(&hd("场景", 232.0, false));
-    b.push_str(&hd("本引擎", 790.0, true));
-    b.push_str(&hd("现有方案", 1020.0, true));
-    b.push_str(&hd("快多少倍", 1200.0, true));
-    b.push_str(&line(200.0, 414.0, 1216.0, 414.0, "#3d5273", 1.8, 0.95 * ha));
+    let na = ramp(t, 0.4, 0.7);
+    let cnt = (names.len() as f32 * ease_out_cubic(ramp(t, 0.4, 1.2))).round();
+    b.push_str(&ctx.text_at(&Spec { s: &format!("{cnt:.0}"), size: 168.0, fill: C_TXT, alpha: na, mono: false, bold: true, ls: 0.0 }, 330.0, 520.0, true));
+    b.push_str(&txt(ctx, "组测试用例", 24.0, C_DIM, 0.95 * na, 330.0, 578.0, true));
+    b.push_str(&line(160.0, 616.0, 500.0, 616.0, C_LINE, 1.0, 0.9 * na));
+    b.push_str(&txt(ctx, "68 组单元测试", 18.0, C_SUB, 0.9 * ramp(t, 1.4, 0.5), 200.0, 660.0, false));
+    b.push_str(&txt(ctx, "16 组集成测试", 18.0, C_SUB, 0.9 * ramp(t, 1.6, 0.5), 200.0, 694.0, false));
+    b.push_str(&mono(ctx, "cargo test", 16.0, C_ACC, 0.85 * ramp(t, 2.2, 0.6), 200.0, 748.0, false));
+    b.push_str(&txt(ctx, "解析 · 布局 · 稳定性 · 公开接口", 16.0, C_SUB, 0.9 * ramp(t, 2.8, 0.6), 200.0, 778.0, false));
 
-    // 当前讲到哪一行
-    let mut active = 0usize;
-    for (i, st) in ROW_T.iter().enumerate() {
-        if t >= *st {
-            active = i;
-        }
-    }
+    // 列表：两列，匀速上滚，边缘渐隐
+    let (lx, ly, lw, lh) = (620.0, 312.0, 1190.0, 546.0);
+    b.push_str(&format!(r#"<defs><clipPath id="listclip"><rect x="{lx}" y="{ly}" width="{lw}" height="{lh}"/></clipPath></defs>"#));
+    b.push_str(&rect(lx, ly, lw, lh, 10.0, "#080d15", 0.5, Some(("#1b283c", 1.0, 0.8))));
 
-    for (i, (label, me, theirs, ratio, note)) in ROWS.iter().enumerate() {
-        let st = ROW_T[i];
-        let a = ramp(t, st, 0.45);
-        if a <= 0.004 {
+    let per_col = names.len().div_ceil(2);
+    let row_h = 30.0;
+    let offset = t * 40.0;
+    let mut g = String::from(r#"<g clip-path="url(#listclip)">"#);
+    for (i, name) in names.iter().enumerate() {
+        let col = i / per_col;
+        let row = i % per_col;
+        let x = lx + 26.0 + col as f32 * 592.0;
+        let y = ly + 30.0 + row as f32 * row_h - offset;
+        if y < ly - 30.0 || y > ly + lh + 30.0 {
             continue;
         }
-        let yt = 424.0 + i as f32 * 80.0;
-        let hot = ping(t, st, 2.1);
-        b.push_str(&rect(200.0, yt, 1016.0, 72.0, 12.0, C_PANEL, (0.55 + 0.42 * hot) * a, Some((C_LINE, 1.4, a))));
-        b.push_str(&rect(200.0, yt, 5.0, 72.0, 2.5, C_ACC, (0.45 + 0.5 * hot) * a, None));
+        let d = ((y - (ly + lh / 2.0)).abs() / (lh / 2.0)).min(1.0);
+        let a = 0.70 + 0.28 * (1.0 - d * d);
+        let appear = ramp(t, 0.3 + i as f32 * 0.012, 0.5);
+        g.push_str(&mono(ctx, &format!("{:02}", i + 1), 13.0, C_FAINT, a * 0.85 * appear, x, y, false));
+        g.push_str(&txt(ctx, name, 18.0, "#c3cfdf", a * appear, x + 38.0, y, false));
+        g.push_str(&txt(ctx, "✓", 15.0, C_ACC, a * 0.95 * appear, x + 470.0, y, false));
+    }
+    g.push_str("</g>");
+    b.push_str(&g);
+    b.push_str(&rect(lx, ly, lw, 46.0, 0.0, "#090d15", 0.85, None));
+    b.push_str(&format!(r##"<rect x="{lx}" y="{ly}" width="{lw}" height="40" fill="url(#fadeup)" fill-opacity="0.72"/>"##));
+    b.push_str(&format!(r##"<rect x="{lx}" y="{}" width="{lw}" height="60" fill="url(#fadedown)" fill-opacity="0.95"/>"##, ly + lh - 60.0));
+    b
+}
 
-        let lb = Spec { s: label, size: 26.0, fill: C_TXT, alpha: a, mono: false, bold: true, ls: 0.0 };
-        b.push_str(&ctx.text_at(&lb, 232.0, yt + 34.0, false));
-        let nb = Spec { s: note, size: 17.0, fill: C_DIM, alpha: 0.92 * a, mono: false, bold: false, ls: 0.0 };
-        b.push_str(&ctx.text_at(&nb, 232.0, yt + 58.0, false));
+fn scene_phone(ctx: &Ctx, art: &Art, t: f32) -> String {
+    let mut b = String::new();
+    let ea = ramp(t, 0.0, 0.6);
 
-        let mv = Spec { s: me, size: 26.0, fill: C_ACC, alpha: a, mono: true, bold: true, ls: 0.0 };
-        b.push_str(&ctx.text_right(&mv, 790.0, yt + 46.0));
-        let tv = Spec { s: theirs, size: 26.0, fill: C_DIM, alpha: a, mono: true, bold: false, ls: 0.0 };
-        b.push_str(&ctx.text_right(&tv, 1020.0, yt + 46.0));
-        let rv = Spec { s: ratio, size: 26.0, fill: if i == 3 { C_AMBER } else { C_TXT }, alpha: a, mono: false, bold: true, ls: 0.0 };
-        b.push_str(&ctx.text_right(&rv, 1200.0, yt + 46.0));
+    // 左侧文案
+    b.push_str(&section_head(ctx, "03 / 03 · 手机", "手机里直接画，不用浏览器", ea));
+    b.push_str(&txt(ctx, "布局由引擎自己算完，", 24.0, C_DIM, 0.95 * ramp(t, 0.8, 0.6), 176.0, 360.0, false));
+    b.push_str(&txt(ctx, "界面拿到坐标直接绘制。", 24.0, C_DIM, 0.95 * ramp(t, 1.0, 0.6), 176.0, 398.0, false));
+
+    let feats = [
+        ("包内不带浏览器内核", "安装包不因公式变大"),
+        ("不依赖 JVM", "纯 Rust，可编到 arm64"),
+        ("只依赖 ttf-parser", "一个字体解析库"),
+    ];
+    for (i, (h, s)) in feats.iter().enumerate() {
+        let ga = ramp(t, 2.2 + i as f32 * 0.7, 0.55);
+        let y = 480.0 + i as f32 * 106.0;
+        b.push_str(&dot(184.0, y - 6.0, 4.5, C_ACC, 0.85 * ga));
+        b.push_str(&txt(ctx, h, 21.0, C_TXT, 0.96 * ga, 204.0, y, false));
+        b.push_str(&txt(ctx, s, 16.0, C_SUB, 0.85 * ga, 204.0, y + 28.0, false));
     }
 
-    // 右侧：这一行对应的公式
-    // 换个行就换一张缩略图：整块硬切，不做交叉淡入，保证一帧只有一条公式
-    let pv_idx = active;
-    let pv_alpha = 0.02 + 0.98 * ramp(t, 0.8, 0.55);
-    let pv_art = &previews[pv_idx];
+    // 手机
+    let (px, py, pw, ph) = (1150.0, 190.0, 380.0, 678.0);
+    let pa = ramp(t, 0.2, 0.7);
+    let lift = (1.0 - ease_out_cubic(pa)) * 40.0;
+    b.push_str(&rect(px, py + lift, pw, ph, 46.0, "#0a0f17", pa, Some(("#2d3d57", 2.2, pa))));
+    b.push_str(&rect(px + 9.0, py + 9.0 + lift, pw - 18.0, ph - 18.0, 38.0, "#070b12", pa, None));
+    b.push_str(&rect(px + pw / 2.0 - 42.0, py + 20.0 + lift, 84.0, 7.0, 3.5, "#1e2a3c", pa, None));
 
-    let pa = ramp(t, 0.3, 0.5);
-    b.push_str(&rect(1252.0, 380.0, 476.0, 376.0, 14.0, C_PANEL, 0.95 * pa, Some((C_LINE, 1.4, pa))));
-    b.push_str(&rect(1252.0, 380.0, 132.0, 3.0, 1.5, C_ACC, 0.9 * pa, None));
-    let card_cap = if pv_idx == 3 { "示意：20 × 20，同一套流程" } else { "表中这一行对应的公式" };
-    let cap = Spec { s: card_cap, size: 17.0, fill: C_SUB, alpha: 0.95 * pa, mono: false, bold: false, ls: 1.0 };
-    b.push_str(&ctx.text_at(&cap, 1276.0, 410.0, false));
-    b.push_str(&draw_art(ctx, pv_art, 1490.0, 586.0, 120.0, 400.0, 300.0, C_TXT, pv_alpha));
+    let ua = pa * ramp(t, 0.8, 0.6);
+    b.push_str(&mono(ctx, "9:41", 13.0, C_DIM, 0.8 * ua, px + 34.0, py + 46.0 + lift, false));
+    b.push_str(&text_right_safe(ctx, "离线", 13.0, C_ACC, 0.8 * ua, px + pw - 34.0, py + 46.0 + lift));
+
+    // 应用界面
+    b.push_str(&txt(ctx, "错题本", 22.0, C_TXT, 0.95 * ua, px + 34.0, py + 100.0 + lift, false));
+    b.push_str(&line(px + 34.0, py + 120.0 + lift, px + pw - 34.0, py + 120.0 + lift, C_LINE, 1.0, 0.9 * ua));
+    b.push_str(&txt(ctx, "第 3 题 · 二次方程", 14.0, C_SUB, 0.9 * ua, px + 34.0, py + 150.0 + lift, false));
+    b.push_str(&rect(px + 26.0, py + 172.0 + lift, pw - 52.0, 190.0, 14.0, "#0d1521", 0.95 * ua, Some(("#22304a", 1.0, ua))));
+
+    let fy = py + 172.0 + lift;
+    b.push_str(&reveal_art_x(art, ctx, px + pw / 2.0, fy + 104.0, 30.0, 288.0, 128.0, C_TXT, t, 1.4, 0.05, 0.55));
+    b.push_str(&txt(ctx, "求根公式已排好版", 13.0, C_FAINT, 0.8 * ramp(t, 3.0, 0.6), px + pw / 2.0, fy + 168.0, true));
+
+    let ba = ramp(t, 3.6, 0.6);
+    b.push_str(&rect(px + 34.0, py + 390.0 + lift, pw - 68.0, 46.0, 10.0, "#12202c", ba, Some((C_ACC, 1.2, 0.7 * ba))));
+    b.push_str(&txt(ctx, "下一题", 17.0, C_ACC, 0.95 * ba, px + pw / 2.0, py + 421.0 + lift, true));
+    for i in 0..3 {
+        let da = ramp(t, 3.9 + i as f32 * 0.2, 0.5);
+        b.push_str(&rect(px + 34.0, py + 462.0 + i as f32 * 58.0 + lift, pw - 68.0, 46.0, 9.0, "#0b111b", 0.9 * da, Some(("#1c283a", 1.0, da))));
+        b.push_str(&rect(px + 46.0, py + 478.0 + i as f32 * 58.0 + lift, 120.0, 8.0, 4.0, "#243147", 0.9 * da, None));
+    }
+
+    // 标注
+    let notes = [("无浏览器", 470.0, C_ACC), ("无 Java 运行时", 540.0, C_ACC), ("字体文件随包带", 610.0, C_SUB)];
+    for (i, (s, y, c)) in notes.iter().enumerate() {
+        let ga = ramp(t, 4.4 + i as f32 * 0.5, 0.55);
+        let (svg, w) = pill(ctx, s, 980.0, *y, 17.0, c, "#0f1a24", 0.95 * ga, 14.0);
+        b.push_str(&svg);
+        b.push_str(&line(980.0 + w + 6.0, *y, px - 8.0, *y, c, 1.2, 0.35 * ga));
+        b.push_str(&dot(px - 8.0, *y, 3.0, c, 0.8 * ga));
+    }
+    b
+}
+
+fn text_right_safe(ctx: &Ctx, s: &str, size: f32, fill: &str, a: f32, right: f32, y: f32) -> String {
+    ctx.text_right(&spec(s, size, fill, a), right, y)
+}
+
+// ---------------------------------------------------------------- 四、局限
+
+fn scene_matrix(ctx: &Ctx, art: &Art, t: f32) -> String {
+    let mut b = String::new();
+    let ea = ramp(t, 0.0, 0.6);
+    b.push_str(&section_head(ctx, "01 / 02 · 矩阵", "复杂矩阵：括号拉伸有上限", ea));
+
+    // 竖版矩阵：20 行 3 列
+    let (cx, cy) = (520.0, 590.0);
+    let max_w = 470.0;
+    let max_h = 430.0;
+    let k = (max_w / art.width).min(max_h / (art.height + art.depth));
+    let left = cx - art.width * k / 2.0;
+    let baseline = cy + (art.height - art.depth) * k / 2.0;
+
+    // 逐行出现
+    let mut g = String::from(r#"<g data-formula="1">"#);
+    for (i, gl) in art.glyphs.iter().enumerate() {
+        let st = 0.5 + i as f32 * 0.028;
+        let pr = clamp01((t - st) / 0.35);
+        if pr <= 0.0 {
+            continue;
+        }
+        let a = clamp01(pr * 1.8);
+        let px = left + gl.x * k;
+        let py = baseline - gl.y * k;
+        let _ = write!(
+            g,
+            r#"<path transform="translate({px:.2} {py:.2}) scale({:.4})" fill="{}" fill-opacity="{a:.3}" d="{}"/>"#,
+            k * gl.scale,
+            C_TXT,
+            gl.d
+        );
+    }
+    for r in &art.rules {
+        g.push_str(&rect(left + r.x * k, baseline - r.y * k, r.w * k, (r.th * k).max(1.2), 0.4, C_TXT, 0.9, None));
+    }
+    g.push_str("</g>");
+    b.push_str(&g);
+
+    // 括号的实际跨度（取缩放最大的括号字形）
+    let mut br = None;
+    for gl in &art.glyphs {
+        if (gl.ch == '(' || gl.ch == '[') && br.map(|b: (f32, f32, f32)| gl.scale > b.2).unwrap_or(true) {
+            br = Some((gl.y + gl.bb.3 * gl.scale, gl.y + gl.bb.1 * gl.scale, gl.scale));
+        }
+    }
+    let (btop, bbot) = br.map(|b| (b.0, b.1)).unwrap_or((art.height, -art.depth));
+    let ytop = baseline - btop * k;
+    let ybot = baseline - bbot * k;
+
+    let ma = ramp(t, 2.0, 0.7);
+    // 红色跨度线：矩阵整体
+    if ma > 0.01 {
+        let full_top = baseline - art.height * k;
+        let full_bot = baseline + art.depth * k;
+        b.push_str(&dashed(760.0, full_top, 760.0, full_bot, C_RED, 1.6, 0.55 * ma, "6 6"));
+        b.push_str(&line(754.0, full_top, 766.0, full_top, C_RED, 1.6, 0.7 * ma));
+        b.push_str(&line(754.0, full_bot, 766.0, full_bot, C_RED, 1.6, 0.7 * ma));
+        b.push_str(&ctx.text_right(&spec("20 行", 15.0, C_RED, 0.9 * ma), 742.0, (full_top + full_bot) / 2.0 + 5.0));
+    }
+
+    // 右侧说明
+    let ta = ramp(t, 0.8, 0.6);
+    let items = [
+        ("20 × 3 的矩阵", "212 个字形单元"),
+        ("每列按最宽对齐", "行距 0.25 em，列距 0.3 em"),
+    ];
+    for (i, (h, s)) in items.iter().enumerate() {
+        let ga = ramp(t, 0.9 + i as f32 * 0.5, 0.6);
+        let y = 360.0 + i as f32 * 96.0;
+        b.push_str(&txt(ctx, h, 24.0, C_TXT, 0.96 * ga, 900.0, y, false));
+        b.push_str(&txt(ctx, s, 17.0, C_SUB, 0.9 * ga, 900.0, y + 30.0, false));
+    }
+    let _ = ta;
+
+    // 括号上限
+    let ca = ramp(t, 5.2, 0.7);
+    if ca > 0.01 {
+        b.push_str(&rect(930.0, 560.0, 800.0, 190.0, 12.0, "#140f14", 0.85 * ca, Some((C_RED, 1.4, 0.55 * ca))));
+        b.push_str(&txt(ctx, "括号最多只能拉伸 4 倍", 26.0, C_RED, 0.98 * ca, 960.0, 612.0, false));
+        b.push_str(&txt(ctx, "20 行的高度已经超出上限，", 18.0, C_DIM, 0.92 * ca, 960.0, 652.0, false));
+        b.push_str(&txt(ctx, "上下两端露在括号外面。", 18.0, C_DIM, 0.92 * ca, 960.0, 682.0, false));
+        b.push_str(&mono(ctx, "clamp(min_scale, 4 × min_scale)", 14.0, C_DIM, 0.85 * ca, 960.0, 718.0, false));
+
+        // 括号实际覆盖范围高亮
+        let pulse = 0.65 + 0.35 * ((t * 2.4).sin() * 0.5 + 0.5);
+        b.push_str(&line(800.0, ytop, 800.0, ybot, C_ACC, 3.0, 0.9 * ca * pulse));
+        b.push_str(&line(794.0, ytop, 806.0, ytop, C_ACC, 2.0, 0.8 * ca));
+        b.push_str(&line(794.0, ybot, 806.0, ybot, C_ACC, 2.0, 0.8 * ca));
+        b.push_str(&mono(ctx, "括号高度", 14.0, C_ACC, 0.9 * ca, 818.0, ytop - 8.0, false));
+    }
 
     // 结论
-    let s1 = "同一个公式，快 2 到 5 倍；整套引擎只依赖一个字体库。";
-    b.push_str(&txt(ctx, s1, 26.0, C_TXT, ramp(t, 13.0, 0.7), 200.0, 830.0, false));
-    let s2 = "超大矩阵那一行只做了本引擎的单独测量，所以不写倍数。";
-    b.push_str(&txt(ctx, s2, 24.0, C_DIM, ramp(t, 13.7, 0.7), 200.0, 876.0, false));
+    let fa = ramp(t, 8.0, 0.7);
+    b.push_str(&txt(ctx, "常用的 2×2 到 5×5 没有问题；再大，括号就跟不上了。", 18.0, C_SUB, 0.9 * fa, 960.0, 800.0, false));
 
-    b.push_str(&footnote(ctx, "数据来自同一台电脑，仓库里可一键复现", ramp(t, 16.4, 0.7)));
     b
 }
 
-// ---------------------------------------------------------------- 场景五：性能对比（柱状图）
-
-const CHART: [(&str, f32, f32, &str); 3] = [
-    ("单个变量", 0.71, 3.43, "4.8 倍"),
-    ("分式", 1.48, 3.74, "2.5 倍"),
-    ("矩阵 2×2", 3.91, 19.74, "5.0 倍"),
-];
-
-fn scene_chart(ctx: &Ctx, t: f32) -> String {
+fn scene_symbols(ctx: &Ctx, t: f32) -> String {
     let mut b = String::new();
-    scene_head(ctx, &mut b, "性能对比", "差多少倍，一眼看得出来", 1.0);
+    let ea = ramp(t, 0.0, 0.6);
+    b.push_str(&section_head(ctx, "02 / 02 · 符号", "这些命令，暂时画不出来", ea));
 
-    b.push_str(&txt(ctx, "算一遍要多久（微秒，数字越小越快）", 22.0, C_FAINT, ramp(t, 0.2, 0.5), 200.0, 348.0, false));
+    let cards = [
+        (r"\cancel{x}", "划掉一项", "取消线需要额外绘制元素"),
+        (r"\ce{H2O}", "化学式", "化学排版是另一套规范"),
+        (r"\textcolor{red}{x}", "彩色文字", "颜色需要绘制层配合"),
+    ];
+    let (cw, ch, gap) = (470.0, 300.0, 50.0);
+    let total = 3.0 * cw + 2.0 * gap;
+    let x0 = (FW - total) / 2.0;
+    for (i, (cmd, name, note)) in cards.iter().enumerate() {
+        let ga = ramp(t, 0.5 + i as f32 * 0.55, 0.7);
+        let x = x0 + i as f32 * (cw + gap);
+        let y = 340.0 - (1.0 - ease_out_cubic(ga)) * 26.0;
+        let a = ga;
+        b.push_str(&rect(x, y, cw, ch, 14.0, "#0d141f", 0.95 * a, Some(("#26344a", 1.2, a))));
+        b.push_str(&mono(ctx, cmd, 21.0, C_TXT, 0.95 * a, x + 28.0, y + 62.0, false));
+        b.push_str(&line(x + 28.0, y + 86.0, x + cw - 28.0, y + 86.0, C_LINE, 1.0, 0.9 * a));
+        b.push_str(&txt(ctx, name, 22.0, C_DIM, 0.95 * a, x + 28.0, y + 132.0, false));
+        b.push_str(&txt(ctx, note, 17.0, C_SUB, 0.95 * a, x + 28.0, y + 166.0, false));
 
-    // 图例
-    let la = ramp(t, 0.35, 0.5);
-    b.push_str(&rect(1230.0, 336.0, 12.0, 12.0, 3.0, C_ACC, 0.95 * la, None));
-    b.push_str(&txt(ctx, "本引擎", 20.0, C_DIM, la, 1252.0, 348.0, false));
-    b.push_str(&rect(1450.0, 336.0, 12.0, 12.0, 3.0, "#5a6b85", 0.95 * la, None));
-    b.push_str(&txt(ctx, "现有方案", 20.0, C_DIM, la, 1472.0, 348.0, false));
-
-    let x0 = 620.0;
-    let max_v = 19.74f32;
-    let bw = 960.0f32;
-    let sc = bw / max_v;
-
-    let ga = ramp(t, 0.3, 0.5);
-    for v in [0.0f32, 5.0, 10.0, 15.0, 20.0] {
-        let x = x0 + v * sc;
-        b.push_str(&rect(x, 392.0, 1.0, 420.0, 0.5, "#243248", 0.9 * ga, None));
-    }
-
-    for (i, (name, me, jl, ratio)) in CHART.iter().enumerate() {
-        let y = 424.0 + i as f32 * 126.0;
-        let st = 0.7 + i as f32 * 1.5;
-        let p = ease_out_cubic((t - st) / 1.1);
-        let a = ramp(t, st, 0.3);
-        if a <= 0.004 {
-            continue;
+        // 红色叉
+        let sa = ramp(t, 1.4 + i as f32 * 0.55, 0.45);
+        if sa > 0.01 {
+            let s = 0.8 + 0.2 * ease_out_back(sa);
+            let (cx, cy) = (x + cw - 62.0, y + 130.0);
+            b.push_str(&ring(cx, cy, 26.0 * s, C_RED, 2.0, 0.75 * sa));
+            b.push_str(&line(cx - 10.0 * s, cy - 10.0 * s, cx + 10.0 * s, cy + 10.0 * s, C_RED, 3.0, 0.9 * sa));
+            b.push_str(&line(cx + 10.0 * s, cy - 10.0 * s, cx - 10.0 * s, cy + 10.0 * s, C_RED, 3.0, 0.9 * sa));
         }
-        b.push_str(&txt(ctx, name, 26.0, C_TXT, a, 210.0, y + 34.0, false));
-
-        let wm = me * sc * p;
-        let wj = jl * sc * p;
-        b.push_str(&rect(x0, y + 4.0, wm.max(1.0), 26.0, 4.0, C_ACC, 0.92 * a, None));
-        b.push_str(&rect(x0, y + 38.0, wj.max(1.0), 26.0, 4.0, "#5a6b85", 0.9 * a, None));
-
-        let va = ramp(t, st + 0.6, 0.35);
-        b.push_str(&mono(ctx, &format!("{me:.2}"), 19.0, C_ACC, va, x0 + wm + 12.0, y + 25.0, false));
-        b.push_str(&mono(ctx, &format!("{jl:.2}"), 19.0, C_DIM, va, x0 + wj + 12.0, y + 59.0, false));
-
-        let rsp = Spec { s: ratio, size: 30.0, fill: C_ACC, alpha: va, mono: false, bold: true, ls: 0.0 };
-        b.push_str(&ctx.text_right(&rsp, 1750.0, y + 40.0));
+        let pa = ramp(t, 1.9 + i as f32 * 0.55, 0.5);
+        let (svg, _) = pill(ctx, "暂不支持", x + 28.0, y + 220.0, 16.0, "#ff8f8f", "#2a1219", 0.98 * pa, 13.0);
+        b.push_str(&svg);
     }
 
-    b.push_str(&txt(
-        ctx,
-        "超大矩阵 40 × 40：7202 个符号，算一遍 3.9 毫秒。",
-        27.0,
-        C_TXT,
-        ramp(t, 6.2, 0.7),
-        200.0,
-        858.0,
-        false,
-    ));
-    b.push_str(&txt(
-        ctx,
-        "求和这一项我们略慢（0.95 倍），照实说，没有删。",
-        24.0,
-        C_SUB,
-        ramp(t, 8.2, 0.7),
-        200.0,
-        904.0,
-        false,
-    ));
-    b.push_str(&footnote(ctx, "AMD Ryzen 5 5600 · Arch Linux · 每项 2000 次取中位数 · 计时含拆开与算位置", ramp(t, 4.0, 0.7)));
+    let na = ramp(t, 3.4, 0.7);
+    b.push_str(&txt(ctx, "命令覆盖约 40 个：常用公式够用，冷门命令还要继续补。", 21.0, C_DIM, 0.95 * na, 960.0, 764.0, true));
+    b.push_str(&txt(ctx, "这是「窄而深」的取舍，不是通用排版器。", 17.0, C_SUB, 0.9 * ramp(t, 4.2, 0.7), 960.0, 802.0, true));
     b
 }
 
-// ---------------------------------------------------------------- 场景六：三步流程
+// ---------------------------------------------------------------- 五、应用
 
-const STEPS: [(&str, &str, &str); 3] = [
-    ("拆开", "把一串文字拆成一个个符号", "分子、分母、上下限，各就各位"),
-    ("算位置", "每个符号放哪、多大，一次算完", "上下标自动缩小，长公式自动折行"),
-    ("画出来", "把位置交给手机，一个一个落下去", "先算位置，再照着位置画"),
-];
-
-fn scene_arch(ctx: &Ctx, t: f32) -> String {
+fn scene_use(ctx: &Ctx, t: f32) -> String {
     let mut b = String::new();
-    scene_head(ctx, &mut b, "怎么做的", "三步：拆开、算位置、画出来", 1.0);
+    let ea = ramp(t, 0.0, 0.6);
+    b.push_str(&section_head(ctx, "能拿来做什么", "轻量引擎，适合嵌进理科学习类软件", ea));
 
-    let bw = 440.0;
-    let bh = 210.0;
-    let gap = 80.0;
-    let x0 = (FW - (3.0 * bw + 2.0 * gap)) / 2.0;
-    let y0 = 404.0;
+    let cards = [
+        ("错题 App", "拍照搜题后，把公式重新排干净", 0u8),
+        ("理科学习小程序", "课件、练习里内嵌公式，不额外加载内核", 1u8),
+        ("自研教学软件", "离线题库与讲义，装机即用", 2u8),
+    ];
+    let (cw, ch, gap) = (500.0, 330.0, 55.0);
+    let total = 3.0 * cw + 2.0 * gap;
+    let x0 = (FW - total) / 2.0;
+    for (i, (title, desc, kind)) in cards.iter().enumerate() {
+        let ga = ramp(t, 0.5 + i as f32 * 0.6, 0.7);
+        let x = x0 + i as f32 * (cw + gap);
+        let y = 350.0 + (1.0 - ease_out_cubic(ga)) * 40.0;
+        let a = ga;
+        b.push_str(&rect(x, y, cw, ch, 14.0, "#0e1623", 0.96 * a, Some(("#33465f", 1.3, a))));
 
-    for (i, (title, l1, l2)) in STEPS.iter().enumerate() {
-        let st = 0.7 + i as f32 * 0.55;
-        let a = ramp(t, st, 0.5);
-        let x = x0 + i as f32 * (bw + gap);
-        let hot = ping(t, 5.5 + i as f32 * 4.6, 3.2);
-        let dy = 14.0 * (1.0 - ramp(t, st, 0.55));
-
-        b.push_str(&rect(x, y0 + dy, bw, bh, 16.0, C_PANEL, (0.9 + 0.08 * hot) * a, Some(("#28374f", 1.5, a))));
-        if hot > 0.004 {
-            b.push_str(&rect(x, y0, bw, bh, 16.0, C_ACC, 0.07 * hot * a, Some((C_ACC, 2.0, 0.85 * hot * a))));
+        let (ix, iy) = (x + cw / 2.0, y + 96.0);
+        match kind {
+            0 => {
+                b.push_str(&rect(ix - 34.0, iy - 56.0, 68.0, 112.0, 12.0, "#0a111a", a, Some((C_ACC, 1.6, 0.8 * a))));
+                b.push_str(&rect(ix - 22.0, iy - 34.0, 44.0, 8.0, 4.0, "#2a3a52", 0.9 * a, None));
+                b.push_str(&rect(ix - 22.0, iy - 16.0, 34.0, 6.0, 3.0, "#22304a", 0.9 * a, None));
+                b.push_str(&line(ix - 20.0, iy + 16.0, ix - 6.0, iy + 30.0, C_ACC, 3.0, 0.9 * a));
+                b.push_str(&line(ix - 6.0, iy + 30.0, ix + 20.0, iy + 2.0, C_ACC, 3.0, 0.9 * a));
+            }
+            1 => {
+                for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                    let gx = ix + dx * 34.0 - 26.0;
+                    let gy = iy + dy * 34.0 - 26.0;
+                    b.push_str(&rect(gx, gy, 52.0, 52.0, 12.0, "#0a111a", a, Some((C_ACC, 1.4, 0.75 * a))));
+                }
+                b.push_str(&rect(ix - 12.0, iy - 12.0, 24.0, 24.0, 6.0, C_ACC, 0.5 * a, None));
+            }
+            _ => {
+                b.push_str(&rect(ix - 58.0, iy - 44.0, 116.0, 76.0, 8.0, "#0a111a", a, Some((C_ACC, 1.6, 0.8 * a))));
+                b.push_str(&line(ix - 4.0, iy + 32.0, ix - 4.0, iy + 44.0, C_ACC, 1.6, 0.7 * a));
+                b.push_str(&line(ix - 22.0, iy + 44.0, ix + 14.0, iy + 44.0, C_ACC, 1.6, 0.7 * a));
+                let curve = format!(
+                    r#"<path d="M{:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1}" fill="none" stroke="{}" stroke-width="2.4" stroke-opacity="{:.3}"/>"#,
+                    ix - 40.0,
+                    iy + 18.0,
+                    ix,
+                    iy - 50.0,
+                    ix + 40.0,
+                    iy + 18.0,
+                    C_ACC,
+                    0.85 * a
+                );
+                b.push_str(&curve);
+            }
         }
-        b.push_str(&mono(ctx, &format!("0{}", i + 1), 20.0, C_ACC, 0.9 * a, x + 28.0, y0 + dy + 40.0, false));
-        let ts = Spec { s: title, size: 36.0, fill: C_TXT, alpha: a, mono: false, bold: true, ls: 1.0 };
-        b.push_str(&ctx.text_at(&ts, x + 28.0, y0 + dy + 96.0, false));
-        b.push_str(&txt(ctx, l1, 20.0, C_DIM, 0.95 * a, x + 28.0, y0 + dy + 140.0, false));
-        b.push_str(&txt(ctx, l2, 19.0, C_SUB, 0.9 * a, x + 28.0, y0 + dy + 174.0, false));
 
-        // 箭头
-        if i < 2 {
-            let aa = ramp(t, st + 0.35, 0.35);
-            let ax0 = x + bw + 12.0;
-            let ax1 = x + bw + gap - 14.0;
-            let cy = y0 + bh / 2.0;
-            b.push_str(&line(ax0, cy, ax1 - 6.0, cy, "#6d84a8", 3.0, 0.95 * aa));
-            let _ = write!(
-                b,
-                r##"<path d="M{:.1} {:.1} L{:.1} {:.1} L{:.1} {:.1} Z" fill="#46587a" fill-opacity="{:.3}"/>"##,
-                ax1,
-                cy,
-                ax1 - 12.0,
-                cy - 7.0,
-                ax1 - 12.0,
-                cy + 7.0,
-                aa
-            );
-        }
+        b.push_str(&txt(ctx, title, 24.0, C_TXT, 0.96 * a, x + cw / 2.0, y + 196.0, true));
+        b.push_str(&txt(ctx, desc, 17.0, C_SUB, 0.92 * a, x + cw / 2.0, y + 238.0, true));
+        b.push_str(&rect(x + cw / 2.0 - 24.0, y + 268.0, 48.0, 3.0, 1.5, C_ACC, 0.55 * a, None));
     }
 
-    // 一句话把流程再讲一遍
-    b.push_str(&txt(
-        ctx,
-        "你写的一行公式  →  每个字的位置和大小  →  屏幕上的公式",
-        30.0,
-        C_TXT,
-        ramp(t, 19.0, 0.7),
-        960.0,
-        700.0,
-        true,
-    ));
-    b.push_str(&txt(ctx, "2900 行 Rust · 84 项测试 · 只依赖一个字体解析库", 26.0, C_DIM, ramp(t, 21.0, 0.7), 960.0, 760.0, true));
-    b.push_str(&txt(ctx, "不用 Java，不用浏览器内核；装进 App 只有几百 KB", 26.0, C_DIM, ramp(t, 23.0, 0.7), 960.0, 808.0, true));
-    b.push_str(&txt(ctx, "三步都是纯计算：同样的输入，永远得到同样的结果", 24.0, C_SUB, ramp(t, 25.5, 0.7), 960.0, 858.0, true));
-
-    b.push_str(&footnote(ctx, "引擎只算位置，不画像素；怎么画由手机上的程序照着做", ramp(t, 12.0, 0.8)));
+    let ta = ramp(t, 2.6, 0.7);
+    let items = ["可离线", "体积可控", "易嵌入"];
+    let widths: Vec<f32> = items.iter().map(|s| pill_w(ctx, s, 17.0, 16.0)).collect();
+    let totalw: f32 = widths.iter().sum::<f32>() + 14.0 * (items.len() - 1) as f32;
+    let mut x = 960.0 - totalw / 2.0;
+    for (i, s) in items.iter().enumerate() {
+        let ga = ramp(t, 2.8 + i as f32 * 0.25, 0.5);
+        let (svg, w) = pill(ctx, s, x, 772.0, 17.0, C_ACC, "#16303a", 0.95 * ga * ta, 16.0);
+        b.push_str(&svg);
+        x += w + 14.0;
+    }
     b
 }
 
-// ---------------------------------------------------------------- 场景七：结尾
+// ---------------------------------------------------------------- 六、结尾
 
 fn scene_end(ctx: &Ctx, t: f32) -> String {
     let mut b = String::new();
-    let over = Spec { s: "仓库", size: 24.0, fill: C_ACC, alpha: ramp(t, 0.1, 0.5), mono: false, bold: false, ls: 10.0 };
-    b.push_str(&ctx.text_at(&over, 960.0, 372.0, true));
+    let a = ramp(t, 0.2, 0.8);
+    b.push_str(&txt(ctx, "Mathengine", 92.0, C_TXT, 0.98 * a, 960.0, 380.0, true));
+    b.push_str(&txt(ctx, "轻量 LaTeX 数学排版引擎", 26.0, C_DIM, 0.95 * ramp(t, 0.8, 0.7), 960.0, 436.0, true));
 
-    let repo = Spec { s: "mathengine", size: 104.0, fill: C_TXT, alpha: ramp(t, 0.25, 0.6), mono: true, bold: true, ls: 0.0 };
-    b.push_str(&ctx.text_at(&repo, 960.0, 492.0, true));
+    let lw = 120.0 * ease_out_cubic(ramp(t, 1.2, 0.7));
+    b.push_str(&rect(960.0 - lw, 468.0, lw * 2.0, 2.0, 1.0, C_ACC, 0.75 * a, None));
 
-    b.push_str(&txt(ctx, "Rust 从零实现 · 2900 行 · 只依赖一个字体解析库", 28.0, C_DIM, ramp(t, 0.65, 0.6), 960.0, 562.0, true));
+    let na = ramp(t, 1.6, 0.7);
+    b.push_str(&ctx.text_right(&spec("姓名：", 26.0, C_DIM, 0.95 * na), 890.0, 570.0));
+    let uw = 200.0 * ease_out_cubic(ramp(t, 1.9, 0.8));
+    b.push_str(&line(900.0, 598.0, 900.0 + uw, 598.0, "#c2cede", 2.0, 0.9 * na));
+    let blink = if (t * 1.8).sin() > -0.3 { 0.9 } else { 0.15 };
+    b.push_str(&rect(900.0 + uw + 5.0, 574.0, 2.0, 26.0, 1.0, C_ACC, blink * na, None));
 
-    let la = ramp(t, 0.95, 0.6);
-    let lic = Spec { s: "Apache-2.0", size: 28.0, fill: C_ACC, alpha: la, mono: true, bold: true, ls: 2.0 };
-    let lw = ctx.tw(&lic);
-    b.push_str(&rect(960.0 - lw / 2.0 - 32.0, 604.0, lw + 64.0, 54.0, 27.0, "#0d2a26", 0.9 * la, Some((C_ACC, 1.6, 0.65 * la))));
-    b.push_str(&ctx.text_at(&lic, 960.0, 641.0, true));
-
-    b.push_str(&txt(ctx, "源码与数据可复现", 32.0, C_TXT, ramp(t, 1.35, 0.6), 960.0, 742.0, true));
-
-    b.push_str(&mono(
-        ctx,
-        "docs/EXPERIMENTS.md · docs/screenshots/ · tools/make_demo_video.sh",
-        19.0,
-        C_FAINT,
-        ramp(t, 1.75, 0.6),
-        960.0,
-        800.0,
-        true,
-    ));
-    b.push_str(&footnote(ctx, "本片为无声版：画面逐帧预渲染，配乐与旁白另行混音", ramp(t, 2.4, 0.6)));
+    b.push_str(&txt(ctx, "谢谢各位老师", 38.0, C_TXT, 0.96 * ramp(t, 2.6, 0.8), 960.0, 690.0, true));
+    b.push_str(&mono(ctx, "逐帧离线生成 · 无声版", 14.0, C_FAINT, 0.8 * ramp(t, 3.4, 0.8), 960.0, 830.0, true));
     b
 }
 
-// ---------------------------------------------------------------- 公式绘制
+// ---------------------------------------------------------------- 公式落位
 
 struct Place {
-    k: f32,
     left: f32,
     baseline: f32,
+    k: f32,
 }
 
 fn art_fit(art: &Art, ctx: &Ctx, base: f32, max_w: f32, max_h: f32) -> f32 {
-    let mut size = base;
-    if art.width > 0.0 {
-        size = size.min(max_w * ctx.upem / art.width);
-    }
-    let hd = art.height + art.depth;
-    if hd > 0.0 {
-        size = size.min(max_h * ctx.upem / hd);
-    }
-    size / ctx.upem
+    let k = base / ctx.upem;
+    k.min(max_w / art.width.max(1.0))
+        .min(max_h / (art.height + art.depth).max(1.0))
 }
 
 fn place(art: &Art, ctx: &Ctx, cx: f32, cy: f32, base: f32, max_w: f32, max_h: f32) -> Place {
     let k = art_fit(art, ctx, base, max_w, max_h);
-    let hd = (art.height + art.depth) * k;
-    Place { k, left: cx - art.width * k / 2.0, baseline: cy - hd / 2.0 + art.height * k }
+    let left = cx - art.width * k / 2.0;
+    let baseline = cy + (art.height - art.depth) * k / 2.0;
+    ctx.check_safe(cy - max_h / 2.0, cy + max_h / 2.0, "公式");
+    Place { left, baseline, k }
 }
 
-/// 静止的一条公式：一个组，组内每个字按布局坐标放好。
+/// 字按布局顺序一个个落下，横线随后补上。始终输出一个公式组。
 #[allow(clippy::too_many_arguments)]
-fn draw_art(
-    ctx: &Ctx,
-    art: &Art,
-    cx: f32,
-    cy: f32,
-    base_size: f32,
-    max_w: f32,
-    max_h: f32,
-    fill: &str,
-    alpha: f32,
-) -> String {
-    if alpha <= 0.004 || art.glyphs.is_empty() {
-        return String::new();
-    }
-    let p = place(art, ctx, cx, cy, base_size, max_w, max_h);
-
-    let mut b = format!(
-        r#"<g data-formula="1" transform="translate({:.2} {:.2}) scale({:.5})" fill="{fill}" fill-opacity="{alpha:.3}">"#,
-        p.left, p.baseline, p.k
-    );
-    for g in &art.glyphs {
-        let _ = write!(
-            b,
-            r#"<path transform="translate({:.1} {:.1}) scale({:.4})" d="{}"/>"#,
-            g.x, -g.y, g.scale, g.d
-        );
-    }
-    for r in &art.rules {
-        let _ = write!(
-            b,
-            r#"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}"/>"#,
-            r.x, -r.y, r.w, r.th
-        );
-    }
-    b.push_str("</g>");
-    b
-}
-
-/// 演示用：字按布局顺序一个个落下来，横线随后补上。
-///
-/// 始终输出一个带 `data-formula="1"` 的组（哪怕这一帧还没落下任何字），
-/// 这样「一帧一条公式」的断言才数得准。
-#[allow(clippy::too_many_arguments)]
-fn reveal_art(
+fn reveal_art_x(
     art: &Art,
     ctx: &Ctx,
     cx: f32,
@@ -1047,7 +1409,6 @@ fn reveal_art(
 ) -> String {
     let p = place(art, ctx, cx, cy, base_size, max_w, max_h);
     let n = art.glyphs.len();
-    let dots = n <= 40;
 
     let mut g = String::from(r#"<g data-formula="1">"#);
     for (i, gl) in art.glyphs.iter().enumerate() {
@@ -1059,25 +1420,19 @@ fn reveal_art(
         let e = ease_out_back(pr);
         let a = clamp01(pr * 2.2);
         let px = p.left + gl.x * p.k;
-        let py = p.baseline - gl.y * p.k - 90.0 * (1.0 - e);
-        let sc = p.k * gl.scale * (1.0 + 0.06 * (1.0 - e));
+        let py = p.baseline - gl.y * p.k - 16.0 * (1.0 - e);
+        let sc = p.k * gl.scale * (1.0 + 0.05 * (1.0 - e));
         let _ = write!(
             g,
             r#"<path transform="translate({px:.2} {py:.2}) scale({sc:.5})" fill="{fill}" fill-opacity="{a:.3}" d="{}"/>"#,
             gl.d
         );
-        // 落位瞬间点一颗小亮点，给出逐个落下的节奏
-        let land = st + drop;
-        if dots && t > land {
-            let da = (1.0 - (t - land) / 0.55).clamp(0.0, 1.0) * 0.85;
-            g.push_str(&dot(px + 4.0, p.baseline - gl.y * p.k, 2.2, C_ACC, da));
-        }
     }
 
-    let r0 = t0 + n as f32 * stagger + 0.12;
+    let r0 = t0 + n as f32 * stagger + 0.10;
     for (j, r) in art.rules.iter().enumerate() {
-        let st = r0 + j as f32 * 0.30;
-        let pr = ease_out_cubic((t - st) / 0.55);
+        let st = r0 + j as f32 * 0.22;
+        let pr = ease_out_cubic((t - st) / 0.45);
         if pr <= 0.0 {
             continue;
         }
@@ -1087,7 +1442,7 @@ fn reveal_art(
             p.left + r.x * p.k,
             p.baseline - r.y * p.k,
             r.w * p.k * pr,
-            (r.th * p.k).max(1.4),
+            (r.th * p.k).max(1.2),
             0.98
         );
     }
@@ -1095,57 +1450,40 @@ fn reveal_art(
     g
 }
 
-/// 耗时写法：一千微秒以上换毫秒。
-fn us_text(us: f64) -> String {
-    if us >= 1000.0 {
-        format!("{:.1} 毫秒", us / 1000.0)
-    } else {
-        format!("{:.1} 微秒", us)
-    }
-}
-
-/// 当场测一遍：解析 + 算位置，取中位数。画面上写的数字就是这么来的。
-fn bench_layout(font: &MathFont, latex: &str, iters: usize) -> f64 {
-    let ast = parse(latex).expect("解析待测公式");
-    let mut v: Vec<f64> = Vec::with_capacity(iters);
-    for _ in 0..iters {
-        let t = Instant::now();
-        let l = layout(font, &ast);
-        std::hint::black_box(&l);
-        v.push(t.elapsed().as_secs_f64() * 1e6);
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    v[v.len() / 2]
-}
-
 // ---------------------------------------------------------------- 合成一帧
 
 struct Reel {
-    deco: Art,
-    shows: Vec<Shot>,
-    mats: Vec<Shot>,
-    previews: Vec<Art>,
-}
-
-fn secs(i: usize, start: usize) -> f32 {
-    (i - start) as f32 / FPS
+    quad: Art,
+    mat: Art,
+    code: CodePanel,
+    tests: Vec<String>,
+    kb: u32,
 }
 
 fn scene_body(ctx: &Ctx, r: &Reel, idx: usize, i: usize) -> String {
     match idx {
-        0 => scene_cover(ctx, &r.deco, secs(i, S_COVER)),
-        1 => scene_show(ctx, &r.shows, i - S_SHOW),
-        2 => scene_matrix(ctx, &r.mats, i - S_MATRIX),
-        3 => {
-            let local = i - S_PERF;
-            if local < TBL_LEN {
-                scene_table(ctx, &r.previews, local as f32 / FPS)
+        0 => scene_web(ctx, (i - S_WEB) as f32 / FPS),
+        1 => scene_how(ctx, &r.quad, &r.code, (i - S_HOW) as f32 / FPS),
+        2 => {
+            let local = i - S_WIN;
+            if local < WIN_A {
+                scene_size(ctx, r.kb, local as f32 / FPS)
+            } else if local < WIN_A + WIN_B {
+                scene_tests(ctx, &r.tests, (local - WIN_A) as f32 / FPS)
             } else {
-                scene_chart(ctx, (local - TBL_LEN) as f32 / FPS)
+                scene_phone(ctx, &r.quad, (local - WIN_A - WIN_B) as f32 / FPS)
             }
         }
-        4 => scene_arch(ctx, secs(i, S_ARCH)),
-        _ => scene_end(ctx, secs(i, S_END)),
+        3 => {
+            let local = i - S_LIM;
+            if local < LIM_A {
+                scene_matrix(ctx, &r.mat, local as f32 / FPS)
+            } else {
+                scene_symbols(ctx, (local - LIM_A) as f32 / FPS)
+            }
+        }
+        4 => scene_use(ctx, (i - S_USE) as f32 / FPS),
+        _ => scene_end(ctx, (i - S_END) as f32 / FPS),
     }
 }
 
@@ -1157,27 +1495,27 @@ fn frame(ctx: &Ctx, reel: &Reel, i: usize) -> String {
         }
     }
 
-    // 换场一律硬切：一帧只画一个场景，不做任何交叉淡化
     let body = scene_body(ctx, reel, idx, i);
 
-    // 硬保证：一帧里最多一条公式（封面装饰 / 演示 / 矩阵 / 表格缩略图各 1 条）
+    // 硬保证：一帧最多一条公式
     let n_formula = body.matches(r#"data-formula="1""#).count();
-    let allow = usize::from(matches!(idx, 0 | 1 | 2 | 3));
-    assert!(n_formula <= allow, "第 {i} 帧出现 {n_formula} 条公式，最多允许 {allow}");
-    // 演示、矩阵、表格缩略图这三处必须恰好一条；柱状图不该有任何公式
-    let exact = matches!(idx, 1 | 2) || (idx == 3 && i - S_PERF < TBL_LEN);
-    if exact {
+    assert!(n_formula <= 1, "第 {i} 帧出现 {n_formula} 条公式，最多允许 1");
+    let local = i.saturating_sub(SCENES[idx].0);
+    let want_one = (idx == 1)
+        || (idx == 2 && local >= WIN_A + WIN_B)
+        || (idx == 3 && local < LIM_A);
+    if want_one {
         assert_eq!(n_formula, 1, "第 {i} 帧（场景 {idx}）应有且只有一条公式");
+    } else {
+        assert_eq!(n_formula, 0, "第 {i} 帧（场景 {idx}）不该出现公式");
     }
-    // 硬保证：一帧里最多一套字幕
+    // 硬保证：一帧最多一套字幕（本片不烧字幕，留空给后期）
     let n_cap = body.matches(r#"data-cap="1""#).count();
     assert!(n_cap <= 1, "第 {i} 帧出现 {n_cap} 套字幕，最多允许 1");
 
-    // 硬保证：画面上不出现实现内部的行话（抽帧检查，扫全片成本太高）
-    if i % 11 == 0 {
-        for w in BANNED {
-            assert!(!body.contains(w), "第 {i} 帧出现禁用词「{w}」");
-        }
+    // 硬保证：不出现「实时」类措辞
+    for w in BANNED {
+        assert!(!body.contains(w), "第 {i} 帧出现禁用词「{w}」");
     }
 
     let prog = i as f32 / (TOTAL - 1) as f32;
@@ -1188,28 +1526,20 @@ fn frame(ctx: &Ctx, reel: &Reel, i: usize) -> String {
     );
     svg.push_str(&background(prog, SCENES[idx].1, ctx));
     svg.push_str(&body);
-    // 收尾 0.8 秒压到黑，避免片子硬切结束
+    // 收尾 0.8 秒压黑
     let fade = 1.0 - smooth((i as f32 - (TOTAL as f32 - 24.0)) / 23.0);
     if fade < 0.999 {
-        let _ = write!(
-            svg,
-            r##"<rect width="{FW:.0}" height="{FH:.0}" fill="#000000" fill-opacity="{:.3}"/>"##,
-            1.0 - fade
-        );
+        let _ = write!(svg, r##"<rect width="{FW:.0}" height="{FH:.0}" fill="#000000" fill-opacity="{:.3}"/>"##, 1.0 - fade);
     }
     svg.push_str("</svg>");
     svg
 }
 
-fn main() {
-    let dir = std::env::args().nth(1).unwrap_or_else(|| "/tmp/mgframes".to_string());
-    fs::create_dir_all(&dir).expect("建输出目录");
+// ---------------------------------------------------------------- 入口
 
-    let math_data: &'static [u8] = Box::leak(
-        load_latin_modern_math(mathengine::LM_MATH_OTF)
-            .expect("读 assets/latinmodern-math.otf")
-            .into_boxed_slice(),
-    );
+fn load_fonts() -> (MathFont<'static>, Ctx) {
+    let math_data: &'static [u8] =
+        Box::leak(load_latin_modern_math(mathengine::LM_MATH_OTF).expect("读 assets/latinmodern-math.otf").into_boxed_slice());
     let font = MathFont::from_bytes(math_data).expect("解析字体");
 
     let noto: &'static [u8] = Box::leak(
@@ -1222,14 +1552,14 @@ fn main() {
             .expect("Noto Sans CJK Bold")
             .into_boxed_slice(),
     );
-    let mono_path = "/usr/share/fonts/TTF/JetBrains-Maple-Mono-NF-XX-XX";
+    let mono_dir = "/usr/share/fonts/TTF/JetBrains-Maple-Mono-NF-XX-XX";
     let jbm: &'static [u8] = Box::leak(
-        fs::read(format!("{mono_path}/JetBrainsMapleMono-Regular.ttf"))
+        fs::read(format!("{mono_dir}/JetBrainsMapleMono-Regular.ttf"))
             .expect("JetBrains Maple Mono")
             .into_boxed_slice(),
     );
     let jbm_bold: &'static [u8] = Box::leak(
-        fs::read(format!("{mono_path}/JetBrainsMapleMono-Bold.ttf"))
+        fs::read(format!("{mono_dir}/JetBrainsMapleMono-Bold.ttf"))
             .expect("JetBrains Maple Mono Bold")
             .into_boxed_slice(),
     );
@@ -1241,47 +1571,105 @@ fn main() {
         mono: Metrics::load(jbm, "JetBrains Maple Mono"),
         mono_bold: Metrics::load(jbm_bold, "JetBrains Maple Mono"),
         warn: std::cell::RefCell::new(Vec::new()),
+        bad: std::cell::RefCell::new(Vec::new()),
     };
+    (font, ctx)
+}
 
-    let mut cache: HashMap<u16, String> = HashMap::new();
+/// 从源码里取真实代码行：片段必须逐字出现在 src/layout.rs 中。
+fn read_code_panel(ctx: &Ctx, path: &str, marker: &str, skip: usize, count: usize) -> CodePanel {
+    let src = fs::read_to_string(path).unwrap_or_else(|e| panic!("读 {path}: {e}"));
+    let lines: Vec<&str> = src.lines().collect();
+    let head = lines
+        .iter()
+        .position(|l| l.contains(marker))
+        .unwrap_or_else(|| panic!("在 {path} 里找不到代码起点：{marker}"));
+    let start = head + skip;
+    assert!(start + count <= lines.len(), "代码片段越界");
+    let code: Vec<String> = lines[start..start + count].iter().map(|s| s.to_string()).collect();
+    let snippet = code.join("\n");
+    assert!(src.contains(&snippet), "代码片段与 src/layout.rs 不一致（字符串校验失败）");
+    assert!(!snippet.contains("实时"), "代码片段出现禁用词");
 
-    let deco = build_art(&font, &mut cache, r"e^{i\pi}+1=0").expect("封面装饰公式");
-
-    let mut shows = Vec::new();
-    for (latex, name, note) in SHOW_SRC {
-        let art = build_art(&font, &mut cache, latex).unwrap_or_else(|e| {
-            eprintln!("FAIL {latex}: {e}");
-            std::process::exit(1);
-        });
-        let n = art.glyphs.len();
-        let us = bench_layout(&font, latex, if n > 1500 { 40 } else { 400 });
-        println!("OK   {n:>5} 个字  {:>12}  {latex}", us_text(us));
-        shows.push(Shot { name, note, latex: latex.to_string(), art, micros: us });
+    // 按最长一行反推字号，保证不撑破面板
+    let mut w1 = 0.0f32;
+    for l in &code {
+        w1 = w1.max(ctx.tw(&spec(l, 1.0, C_TXT, 1.0)));
     }
+    let avail = 780.0;
+    let size = (avail / w1.max(0.001)).min(14.0).max(9.0);
+    let y0 = 355.0;
+    let lh = (292.0 + 566.0 - 14.0 - y0) / count as f32;
+    CodePanel { lines: code, start_no: start + 1, size, lh, x: 160.0, y0 }
+}
 
-    let mut mats = Vec::new();
-    for (i, n) in [2usize, 5, 20].into_iter().enumerate() {
-        let latex = matrix_digits(n);
-        let art = build_art(&font, &mut cache, &latex).unwrap_or_else(|e| {
-            eprintln!("FAIL {latex}: {e}");
-            std::process::exit(1);
-        });
-        let glyphs = art.glyphs.len();
-        let us = bench_layout(&font, &latex, if glyphs > 1500 { 40 } else { 400 });
-        println!("OK   {glyphs:>5} 个字  {:>12}  {latex}", us_text(us));
-        mats.push(Shot { name: MAT_NAMES[i].0, note: MAT_NAMES[i].1, latex, art, micros: us });
+/// 从源码里收集 `#[test]` 后面的函数名，按文件顺序。
+fn read_test_names(repo: &str) -> Vec<String> {
+    let files = ["src/ast.rs", "src/ffi.rs", "src/font.rs", "src/layout.rs", "src/token.rs", "tests/public_api.rs", "tests/real_world.rs", "tests/robustness.rs", "tests/symbols.rs"];
+    let mut out = Vec::new();
+    for f in files {
+        let p = format!("{repo}/{f}");
+        let src = fs::read_to_string(&p).unwrap_or_else(|e| panic!("读 {p}: {e}"));
+        let lines: Vec<&str> = src.lines().collect();
+        for (i, l) in lines.iter().enumerate() {
+            if !l.contains("#[test]") {
+                continue;
+            }
+            for l2 in lines.iter().skip(i).take(4) {
+                if let Some(rest) = l2.trim().strip_prefix("fn ") {
+                    let name: String = rest.chars().take_while(|c| *c != '(').collect();
+                    if !name.is_empty() {
+                        out.push(name);
+                        break;
+                    }
+                }
+            }
+        }
     }
-    // 表格每一行配一张缩略图；超大矩阵那一行用 20×20 示意（40×40 缩到 476px 宽只剩噪点）
-    let dense = build_art(&font, &mut cache, &matrix_digits(20)).expect("20×20 缩略图");
-    println!("OK   {:>5} 个字  表格用 20×20 缩略图", dense.glyphs.len());
-    let previews = vec![
-        build_art(&font, &mut cache, "x").expect("缩略图 x"),
-        build_art(&font, &mut cache, r"\frac{a+b}{c}").expect("缩略图 分式"),
-        build_art(&font, &mut cache, &matrix_digits(2)).expect("缩略图 2×2"),
-        dense,
-    ];
+    out
+}
 
-    let reel = Reel { deco, shows, mats, previews };
+fn main() {
+    let dir = std::env::args().nth(1).unwrap_or_else(|| "/tmp/mgframes".to_string());
+    fs::create_dir_all(&dir).expect("建输出目录");
+    let repo = env!("CARGO_MANIFEST_DIR");
+
+    let (font, ctx) = load_fonts();
+
+    let quad = build_art(&font, r"\frac{-b\pm\sqrt{b^{2}-4ac}}{2a}").expect("求根公式");
+    println!("原理公式：{} 个符号单元，盒 {:.0}×{:.0}，深 {:.0}", quad.glyphs.len(), quad.width, quad.height, quad.depth);
+
+    let rows: Vec<String> = (0..20)
+        .map(|r| (0..3).map(|c| format!("a_{{{r}{c}}}")).collect::<Vec<_>>().join(" & "))
+        .collect();
+    let latex = format!(r"\begin{{pmatrix}}{}\end{{pmatrix}}", rows.join(r" \\ "));
+    let mat = build_art(&font, &latex).expect("20×3 矩阵");
+    println!("矩阵：{} 个字形单元", mat.glyphs.len());
+
+    let code = read_code_panel(&ctx, &format!("{repo}/src/layout.rs"), "fn layout_stacked(", 7, 27);
+    println!("代码片段：{}–{} 行，{} 行", code.start_no, code.start_no + code.lines.len() - 1, code.lines.len());
+
+    let tests = read_test_names(repo);
+    assert_eq!(tests.len(), 84, "测试用例数应为 84，实际 {}", tests.len());
+    println!("测试用例：{} 条", tests.len());
+
+    // 源码行数：与 README / 论文里的「2900 余行」对齐（含测试模块，按物理行计）
+    let mut src_lines = 0usize;
+    let mut src_files: Vec<_> = fs::read_dir(format!("{repo}/src")).expect("src 目录").filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().map(|x| x == "rs").unwrap_or(false)).collect();
+    src_files.sort();
+    for f in &src_files {
+        src_lines += fs::read_to_string(f).unwrap_or_default().lines().count();
+    }
+    println!("src/ 共 {src_lines} 行（{} 个文件）", src_files.len());
+    assert!(src_lines >= 2900, "源码行数不到 2900 行，画面上不能写「2900 余行」");
+
+    let so = format!("{repo}/target/release/libmathengine.so");
+    let bytes = fs::metadata(&so).unwrap_or_else(|e| panic!("{so}: {e}")).len();
+    let kb = (bytes as f64 / 1000.0).round() as u32;
+    println!("动态库：{bytes} 字节 = {kb} KB");
+    assert!((400..=700).contains(&kb), "动态库体积异常：{kb} KB");
+
+    let reel = Reel { quad, mat, code, tests, kb };
 
     for i in 0..TOTAL {
         let svg = frame(&ctx, &reel, i);
@@ -1292,15 +1680,10 @@ fn main() {
     }
     println!("共 {TOTAL} 帧（{:.1} s）→ {dir}", TOTAL as f32 / FPS);
 
-    println!("场景表：");
+    println!("分段时间：");
     for (k, (start, name)) in SCENES.iter().enumerate() {
         let end = if k + 1 < SCENES.len() { SCENES[k + 1].0 } else { TOTAL };
-        println!(
-            "  {name:<6} {:>6.2} – {:>6.2} s  (帧 {start}–{})",
-            *start as f32 / FPS,
-            end as f32 / FPS,
-            end - 1
-        );
+        println!("  {name:<6} {:>6.2} – {:>6.2} s  (帧 {start}–{})", *start as f32 / FPS, end as f32 / FPS, end - 1);
     }
 
     let warn = ctx.warn.borrow();
@@ -1309,5 +1692,9 @@ fn main() {
         for w in warn.iter() {
             println!("  {w}");
         }
+    }
+    let bad = ctx.bad.borrow();
+    if !bad.is_empty() {
+        panic!("字幕安全区被占用（{} 处）：\n{}", bad.len(), bad.join("\n"));
     }
 }

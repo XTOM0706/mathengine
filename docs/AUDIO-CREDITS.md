@@ -19,13 +19,11 @@ edge-tts 的 `zh-CN-YunxiNeural`（男声），由 `tools/make_voiceover_edge.sh
 
 | 项 | 值 |
 |---|---|
-| 曲名 | Feel me |
-| 作者 | LiQWYD |
-| 中间来源 | B 站 `BV1Lg411X7Ce`（UP：无版权音乐口袋） |
-| 原作者频道 | https://www.youtube.com/watch?v=4fDbwGS5oa8 |
-| 使用片段 | 原曲中段，长度与成片一致 |
+| 曲名 | Sea of Problems |
+| 中间来源 | B 站 `av656871538` |
+| 使用片段 | 原曲 110 秒，循环一次补齐 180 秒 |
 
-**署名要求**：LiQWYD 的作品通常以 CC-BY 发布，使用时须标注「Music by LiQWYD」。正式提交时请把这一行放进视频简介或附件说明；若组委会要求书面授权，联系原作者或改用 CC0 曲目。
+**版权风险**：这首是网络热门曲目，不是免版权素材。校内展示一般没问题，但若视频要公开传播或用于商业用途，需要授权。兜底方案见下文。
 
 ## 兜底方案
 
